@@ -1,0 +1,23 @@
+#pragma once
+// Pet state — mirrors the JSON shape returned by GET /pet/state on the bridge.
+
+#include <stdint.h>
+#include <string.h>
+
+struct PetState {
+    char     mood[16];          // "happy" | "hungry" | "sleepy" | "sick"
+    int32_t  age_s;
+    int32_t  food_today;
+    char     last_msg[256];
+    int32_t  last_msg_ts;
+    int32_t  total_tokens_ever;
+    int32_t  audio_runs_today;
+    int32_t  ts;                // unix seconds, server clock
+    int32_t  breakdown_claude;
+    int32_t  breakdown_codex;
+};
+
+inline void petStateReset(PetState& s) {
+    memset(&s, 0, sizeof(s));
+    strncpy(s.mood, "unknown", sizeof(s.mood) - 1);
+}
