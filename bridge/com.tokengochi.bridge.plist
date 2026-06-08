@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tokengochi.bridge</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE_BIN__</string>
+    <string>__BRIDGE_DIR__/tamagotchi-bridge.mjs</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__BRIDGE_DIR__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart on crash only. A clean `launchctl stop` or `kill` will not be revived. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+    <key>Crashed</key>
+    <true/>
+  </dict>
+
+  <!-- Don't tight-loop if the bridge is crashing on startup. -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__BRIDGE_DIR__/bridge.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>__BRIDGE_DIR__/bridge.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- keep a sane PATH for any subprocess the bridge might spawn -->
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>NODE_ENV</key>
+    <string>production</string>
+  </dict>
+</dict>
+</plist>
