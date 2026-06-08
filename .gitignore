@@ -1,0 +1,22 @@
+# OS
+.DS_Store
+*.swp
+*~
+
+# Editors
+.idea/
+.vscode/
+
+# Bridge
+bridge/.env
+bridge/state.json
+bridge/bridge.log
+
+# Firmware
+firmware/.pio/
+firmware/build/
+firmware/.vscode/
+firmware/src/secrets.h
+
+# Tools
+tools/_artifacts/
