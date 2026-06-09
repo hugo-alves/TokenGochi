@@ -14,6 +14,10 @@ static const uint32_t BLINK_PERIOD_MS = 250;  // 4 fps
 
 uint8_t moodIndex(const char* mood) {
     if (!mood) return PET_HAPPY;
+    if (strcmp(mood, "excited") == 0) return PET_HAPPY;
+    if (strcmp(mood, "very happy") == 0) return PET_HAPPY;
+    if (strcmp(mood, "peckish") == 0) return PET_HUNGRY;
+    if (strcmp(mood, "very hungry") == 0) return PET_HUNGRY;
     if (strcmp(mood, "hungry") == 0) return PET_HUNGRY;
     if (strcmp(mood, "sleepy") == 0) return PET_SLEEPY;
     if (strcmp(mood, "sick")   == 0) return PET_SICK;

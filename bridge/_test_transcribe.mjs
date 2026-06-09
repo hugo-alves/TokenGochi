@@ -205,15 +205,15 @@ console.log("test 6 (/pet/reset soft-reset): ok");
 // --- cleanup ---------------------------------------------------------------
 bridge.kill("SIGTERM");
 await new Promise(r => bridge.once("exit", r));
-mockGroq.close();
 await new Promise(r => mockGroq.close(() => r()));
 
 if (hadState) {
   copyFileSync(STATE_BACK, STATE_FILE);
-  unlinkSync(STATE_BACK);
+  if (existsSync(STATE_BACK)) unlinkSync(STATE_BACK);
 } else if (existsSync(STATE_FILE)) {
   unlinkSync(STATE_FILE);
 }
+if (!hadState && existsSync(STATE_BACK)) unlinkSync(STATE_BACK);
 
 console.log("\nAll /transcribe tests passed.");
 process.exit(0);

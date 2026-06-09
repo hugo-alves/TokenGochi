@@ -7,6 +7,7 @@ export interface RawTokenInput {
     claude: number;
     codex: number;
   };
+  usage?: TokenSnapshot["usage"];
   ts?: number;
 }
 
@@ -25,6 +26,7 @@ interface TokenRow {
   tokens_today: number;
   breakdown_claude: number;
   breakdown_codex: number;
+  usage_json: string;
   ts: number;
 }
 
@@ -45,6 +47,16 @@ function asString(v: unknown, fallback = ""): string {
   return fallback;
 }
 
+function parseUsage(v: string): TokenSnapshot["usage"] | null {
+  if (!v) return null;
+  try {
+    const parsed = JSON.parse(v);
+    return parsed && typeof parsed === "object" ? parsed as TokenSnapshot["usage"] : null;
+  } catch {
+    return null;
+  }
+}
+
 function dayId(tsSec: number): string {
   const d = new Date(tsSec * 1000);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -52,8 +64,9 @@ function dayId(tsSec: number): string {
 
 function toPayload(state: AppStateRow, tokens: TokenRow): PetStatePayload {
   const now = Math.floor(Date.now() / 1000);
+  const usage = parseUsage(tokens.usage_json);
   return {
-    mood: computeMood(tokens.tokens_today, new Date(now * 1000)),
+    mood: computeMood(tokens.tokens_today, new Date(now * 1000), usage),
     age_s: Math.max(0, now - state.pet_birth_ts),
     food_today: tokens.tokens_today,
     last_msg: state.last_msg,
@@ -64,6 +77,7 @@ function toPayload(state: AppStateRow, tokens: TokenRow): PetStatePayload {
       claude: tokens.breakdown_claude,
       codex: tokens.breakdown_codex,
     },
+    usage,
     ts: tokens.ts,
   };
 }
@@ -87,8 +101,8 @@ export async function ensureDefaults(db: D1Database, nowSec = Math.floor(Date.no
   if (!tokenRow) {
     await db.prepare(`
       INSERT INTO token_counters
-      (id, tokens_today, breakdown_claude, breakdown_codex, ts, updated_at)
-      VALUES (?, 0, 0, 0, ?, ?)
+      (id, tokens_today, breakdown_claude, breakdown_codex, usage_json, ts, updated_at)
+      VALUES (?, 0, 0, 0, NULL, ?, ?)
     `).bind(TOKEN_COUNTER_ID, nowSec, nowSec).run();
   }
 }
@@ -123,7 +137,7 @@ async function getStateRow(db: D1Database): Promise<AppStateRow> {
 
 async function getTokenRow(db: D1Database): Promise<TokenRow> {
   const row = await db.prepare(`
-    SELECT tokens_today, breakdown_claude, breakdown_codex, ts
+    SELECT tokens_today, breakdown_claude, breakdown_codex, usage_json, ts
     FROM token_counters
     WHERE id = ?
   `).bind(TOKEN_COUNTER_ID).first();
@@ -132,6 +146,7 @@ async function getTokenRow(db: D1Database): Promise<TokenRow> {
     tokens_today: asInt(row["tokens_today"], 0),
     breakdown_claude: asInt(row["breakdown_claude"], 0),
     breakdown_codex: asInt(row["breakdown_codex"], 0),
+    usage_json: asString(row["usage_json"], ""),
     ts: asInt(row["ts"], Math.floor(Date.now() / 1000)),
   };
 }
@@ -145,6 +160,7 @@ export async function getTokensToday(db: D1Database): Promise<TokenSnapshot> {
       claude: row.breakdown_claude,
       codex: row.breakdown_codex,
     },
+    usage: parseUsage(row.usage_json),
     ts: row.ts,
   };
 }
@@ -162,6 +178,7 @@ export async function upsertTokenSnapshot(db: D1Database, payload: RawTokenInput
   const tokensToday = Math.max(0, asInt(payload.tokens_today, 0));
   const breakdownClaude = Math.max(0, asInt(payload.breakdown?.claude, 0));
   const breakdownCodex = Math.max(0, asInt(payload.breakdown?.codex, 0));
+  const usageJson = payload.usage ? JSON.stringify(payload.usage).slice(0, 8000) : null;
   const nowY = dayId(nowSec);
   const ts = payload.ts ? asInt(payload.ts, nowSec) : nowSec;
 
@@ -182,9 +199,9 @@ export async function upsertTokenSnapshot(db: D1Database, payload: RawTokenInput
   await db.batch([
     db.prepare(`
       INSERT OR REPLACE INTO token_counters
-      (id, tokens_today, breakdown_claude, breakdown_codex, ts, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).bind(TOKEN_COUNTER_ID, tokensToday, breakdownClaude, breakdownCodex, ts, nowSec),
+      (id, tokens_today, breakdown_claude, breakdown_codex, usage_json, ts, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(TOKEN_COUNTER_ID, tokensToday, breakdownClaude, breakdownCodex, usageJson, ts, nowSec),
     db.prepare(`
       UPDATE app_state
       SET total_tokens_ever = ?, peak_today_total = ?, peak_today_date = ?, updated_at = ?

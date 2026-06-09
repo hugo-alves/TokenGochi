@@ -1,4 +1,4 @@
-# Status — `2026-06-08`
+# Status — `2026-06-09`
 
 ## TL;DR
 
@@ -8,6 +8,144 @@ live on `localhost:8787` under launchd (`com.tokengochi.bridge`, PID
 and the 8 MB PSRAM, and tries to connect to WiFi — but the
 `Parada Clientes` AP is rejecting the association. This is a
 network-side issue, not a firmware or bridge issue.
+
+## Codex Account Usage Migration — `2026-06-09`
+
+Implementation is deployed to staging, the VPS token source is updated, and
+the physical StopWatch display is verified.
+
+Verified behavior:
+
+- CodexBar source investigation showed account usage comes from Codex OAuth
+  credentials in `~/.codex/auth.json` and the ChatGPT backend usage endpoint,
+  which returns rate-limit percentages rather than raw tokens.
+- VPS `deployer@100.78.209.61` can call that account endpoint using its own
+  Codex login and reports plan `pro`.
+- `bridge/tamagotchi-bridge.mjs --once` now returns `usage.source:
+  "codex_account"` by default in `TOKEN_USAGE_SOURCE=auto`.
+- Account percentages are mapped to the existing integer contract as
+  `metric_used_percent * 1000`, while `usage.codex.metric_used_percent`
+  preserves the real account percentage.
+- Staging D1 migration `0002_token_usage_metadata.sql` is applied.
+- Staging Worker deploy `0f45a11e-6539-4b70-8b10-ea460751336e` is live.
+- End-to-end smoke passed:
+  source total `27500`, Worker pull total `27500`, and `/pet/state`
+  `food_today=27500`, `usage.source="codex_account"`,
+  `metric_used_percent=27.5`.
+- Firmware was rebuilt and uploaded to the StopWatch. Screen capture
+  `screenshots/codex-account-percent-verified.png` shows `27.5% use` and
+  `happy`.
+
+Checks passed:
+
+- `node bridge/_test_pure.mjs`
+- `node bridge/_test_token_source.mjs`
+- `node bridge/_test_transcribe.mjs`
+- `cd cloudflare && npm run build`
+- `cd firmware && /Users/hugoalves/Code/TokenGochi/firmware/.venv/bin/pio run`
+- `TOKEN_SOURCE_TOKEN=... node tools/cloud-vps-smoke.mjs`
+- `git diff --check`
+
+Production deployment remains not verified.
+
+## Codex Pace Mood — `2026-06-09`
+
+Implementation is deployed to staging, the VPS token source is updated, and
+the physical StopWatch display is verified.
+
+Verified behavior:
+
+- CodexBar pace logic was traced to `UsagePace.weekly` and
+  `CodexHistoricalPaceEvaluator`. CodexBar uses historical weekly curves when
+  enough samples exist, otherwise falls back to a linear expected pace through
+  the reset window.
+- TokenGochi now computes the same linear pace fallback for Codex account
+  weekly usage and exposes it as `usage.codex.pace`.
+- CodexBar's stage thresholds are reproduced: on track within 2%, slight within
+  6%, ahead/behind within 12%, and far ahead/behind beyond 12%.
+- Mood now follows pace for Codex account usage with a nuanced ladder:
+  `peckish`, `hungry`, `very hungry`, `happy`, `excited`, and `very happy`.
+- VPS one-shot snapshot returned `pace.stage="far_behind"`,
+  `expected_used_percent=72.5`, `actual_used_percent=27`, and mood `hungry`.
+- Staging Worker deploy `9c435044-6c6f-477f-9091-0880d32a1fcf` is live.
+- Staging `/pet/state` returned `mood="very hungry"`, `metric_used_percent=29.5`,
+  and `pace.stage="far_behind"`.
+- Firmware was rebuilt and uploaded. Screen capture
+  `screenshots/codex-pace-very-hungry-verified.png` shows `29.5% use` and
+  `very hungry`.
+
+Checks passed:
+
+- `node bridge/_test_pure.mjs`
+- `node bridge/_test_token_source.mjs`
+- `node bridge/_test_transcribe.mjs`
+- `cd cloudflare && npm run build`
+- `cd firmware && /Users/hugoalves/Code/TokenGochi/firmware/.venv/bin/pio run`
+- `TOKEN_SOURCE_TOKEN=... node tools/cloud-vps-smoke.mjs`
+
+Historical CodexBar-style pace is not implemented yet. TokenGochi currently
+uses the same linear fallback CodexBar uses when historical data is unavailable.
+
+## VPS Token Source Migration — `2026-06-09`
+
+Implementation is deployed to staging and the live VPS pull path is verified.
+
+Verified locally:
+
+- `bridge/token-source.mjs` serves authenticated VPS token snapshots from the
+  existing Codex/Claude log scanner.
+- Cloudflare Worker code can pull from `TOKEN_SOURCE_URL`, persist snapshots,
+  refresh on a cron, and opportunistically refresh stale token state before
+  watch reads.
+- `tools/cloud-vps-smoke.mjs` verifies source health, source tokens, Worker
+  pull, and `/pet/state` consistency without printing secrets.
+- `tools/rollout-vps-token-source.mjs` defaults to dry-run, requires
+  `--apply --yes` before changing the VPS or Tailscale Funnel, and reuses the
+  existing VPS token-source secret on later deploys.
+- Local checks passed:
+  `node bridge/_test_token_source.mjs`,
+  `node bridge/_test_pure.mjs`,
+  `node bridge/_test_transcribe.mjs`,
+  and `cd cloudflare && npm run build`.
+
+Verified VPS facts:
+
+- Tailscale address: `100.78.209.61`.
+- SSH user/path: `deployer@100.78.209.61`.
+- Hostname: `ubuntu-4gb-fsn1-1`.
+- Tailscale DNS name: `g33k-kid-agent.taild47216.ts.net`.
+- Node is available on the VPS.
+- `tokengochi-token-source.service` is installed, enabled, and active.
+- Local VPS `GET http://127.0.0.1:8790/health` returns
+  `{"ok":true,"version":"0.1.0"}`.
+- Unauthenticated local VPS `GET /tokens_today` returns 401.
+- Authenticated local VPS `GET /tokens_today` returns a token snapshot.
+- Tailscale Funnel is active at `https://g33k-kid-agent.taild47216.ts.net` and
+  proxies to `http://127.0.0.1:8790`.
+- Public `GET https://g33k-kid-agent.taild47216.ts.net/health` returns
+  `{"ok":true,"version":"0.1.0"}`.
+- Cloudflare staging secrets `TOKEN_SOURCE_URL` and `TOKEN_SOURCE_TOKEN` are
+  set, and staging deploy `fa0d2dca-3ba3-4b84-b34d-8bf87cf5a983` is live.
+- `node tools/cloud-vps-smoke.mjs` passed against staging with the VPS source:
+  source health OK, Worker health OK with `token_source_configured=true`,
+  Worker `/ingest/pull` returned the VPS token snapshot, and `/pet/state`
+  matched that snapshot.
+
+Physical StopWatch verification:
+
+- Mac `com.tokengochi.ingest` was removed from launchd and stayed absent after
+  an 80 second check; only `com.tokengochi.bridge` remained.
+- Firmware was rebuilt and uploaded with the staging `PROXY_URL`.
+- Serial monitor showed WiFi connected with IP `192.168.1.243`.
+- Serial monitor showed Cloudflare bridge health OK with HTTP 200.
+- Serial monitor showed a pet-state poll matching the VPS-backed staging state:
+  `mood=hungry food=0 age=5103 ts=1780993452`.
+- Device screen capture `screenshots/vps-cloud-verified.png` shows `0k tk`
+  and hungry state, matching the VPS source rather than the old Mac total.
+
+Not verified yet:
+
+- Production deployment. The verified path is staging only.
 
 ## What's working
 

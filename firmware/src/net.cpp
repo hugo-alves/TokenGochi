@@ -94,6 +94,26 @@ static bool getJson(const char* path, JsonDocument& doc) {
     return deserializeJson(doc, body) == DeserializationError::Ok;
 }
 
+static void parseUsageMetadata(JsonDocument& doc, PetState& out) {
+    JsonObject usage = doc["usage"];
+    if (usage.isNull()) return;
+    JsonObject codex = usage["codex"];
+    if (codex.isNull()) return;
+
+    const char* source = codex["source"] | "";
+    if (strcmp(source, "codex_account") != 0) return;
+
+    if (codex["metric_used_percent"].is<float>() || codex["metric_used_percent"].is<int>()) {
+        float percent = codex["metric_used_percent"] | 0.0f;
+        if (percent < 0.0f) percent = 0.0f;
+        if (percent > 100.0f) percent = 100.0f;
+        out.codex_usage_percent_x10 = (int16_t)(percent * 10.0f + 0.5f);
+    }
+
+    const char* plan = codex["plan_type"] | "";
+    strncpy(out.codex_plan, plan, sizeof(out.codex_plan) - 1);
+}
+
 int postReset(PetState& out) {
     petStateReset(out);
     if (WiFi.status() != WL_CONNECTED) return 0;
@@ -123,6 +143,7 @@ int postReset(PetState& out) {
         out.breakdown_claude = bd["claude"] | 0;
         out.breakdown_codex  = bd["codex"]  | 0;
     }
+    parseUsageMetadata(doc, out);
     return code;
 }
 
@@ -156,6 +177,7 @@ bool fetchPetState(PetState& out) {
         out.breakdown_claude = bd["claude"] | 0;
         out.breakdown_codex  = bd["codex"]  | 0;
     }
+    parseUsageMetadata(doc, out);
     return true;
 }
 

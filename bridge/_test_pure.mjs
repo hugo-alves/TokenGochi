@@ -4,7 +4,13 @@ import { strict as assert } from "node:assert";
 import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { codexCumulative } from "./tamagotchi-bridge.mjs";
+import {
+  accountUsageMetadata,
+  accountUsagePace,
+  codexCumulative,
+  computeMood as bridgeComputeMood,
+  paceStage,
+} from "./tamagotchi-bridge.mjs";
 
 // --- mood (re-implemented here; the live one is module-private) ------------
 function computeMood(foodToday, now = new Date()) {
@@ -91,5 +97,66 @@ assert.equal(
   "Codex event_msg token_count info.total_token_usage is cumulative"
 );
 console.log("codexCumulative: 1/1 ok");
+
+// --- Codex account usage schema -------------------------------------------
+const accountNowSec = Math.floor(Date.now() / 1000);
+const accountUsage = accountUsageMetadata({
+  plan_type: "pro",
+  rate_limit: {
+    primary_window: { used_percent: 26, reset_at: accountNowSec + 9000, limit_window_seconds: 18000 },
+    secondary_window: { used_percent: 28, reset_at: accountNowSec + 500, limit_window_seconds: 1000 },
+  },
+  additional_rate_limits: [{
+    limit_name: "GPT-5.3-Codex-Spark",
+    metered_feature: "codex_bengalfox",
+    rate_limit: {
+      primary_window: { used_percent: 0, reset_at: 1781012036 },
+      secondary_window: { used_percent: 2, reset_at: 1781546377 },
+    },
+  }],
+});
+assert.equal(accountUsage.source, "codex_account");
+assert.equal(accountUsage.plan_type, "pro");
+assert.equal(accountUsage.primary_used_percent, 26);
+assert.equal(accountUsage.secondary_used_percent, 28);
+assert.equal(accountUsage.metric_used_percent, 27);
+assert.equal(accountUsage.additional_rate_limits[0].secondary_used_percent, 2);
+assert.equal(accountUsage.pace.stage, "far_behind");
+console.log("codex account usage mapping: 7/7 ok");
+
+// --- Codex pace -------------------------------------------------------------
+assert.equal(paceStage(0), "on_track");
+assert.equal(paceStage(4), "slightly_ahead");
+assert.equal(paceStage(8), "ahead");
+assert.equal(paceStage(13), "far_ahead");
+assert.equal(paceStage(-4), "slightly_behind");
+assert.equal(paceStage(-8), "behind");
+assert.equal(paceStage(-13), "far_behind");
+
+const pace = accountUsagePace(
+  { used_percent: 60, reset_at: 2000, limit_window_seconds: 1000 },
+  1500 * 1000
+);
+assert.equal(pace.expected_used_percent, 50);
+assert.equal(pace.delta_percent, 10);
+assert.equal(pace.stage, "ahead");
+assert.equal(bridgeComputeMood(0, new Date("2026-06-08T12:00:00"), { codex: { pace } }), "excited");
+assert.equal(
+  bridgeComputeMood(0, new Date("2026-06-08T12:00:00"), { codex: { pace: { stage: "slightly_behind" } } }),
+  "peckish"
+);
+assert.equal(
+  bridgeComputeMood(0, new Date("2026-06-08T12:00:00"), { codex: { pace: { stage: "behind" } } }),
+  "hungry"
+);
+assert.equal(
+  bridgeComputeMood(0, new Date("2026-06-08T12:00:00"), { codex: { pace: { stage: "far_behind" } } }),
+  "very hungry"
+);
+assert.equal(
+  bridgeComputeMood(0, new Date("2026-06-08T12:00:00"), { codex: { pace: { stage: "far_ahead" } } }),
+  "very happy"
+);
+console.log("codex pace: 16/16 ok");
 
 console.log("\nAll logic tests passed.");

@@ -74,6 +74,7 @@ function readSnapshot() {
       claude: Math.max(0, Math.floor((tokens.breakdown?.claude ?? 0))),
       codex: Math.max(0, Math.floor((tokens.breakdown?.codex ?? 0))),
     },
+    usage: tokens.usage && typeof tokens.usage === "object" ? tokens.usage : undefined,
     ts: Math.max(0, Math.floor(tokens.ts || Date.now() / 1000)),
   };
 }

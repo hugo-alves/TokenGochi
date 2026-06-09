@@ -149,6 +149,47 @@ directory is gitignored because these PNGs are generated artifacts.
 | `--timeout-ms N` | `90000`                           | overall serial capture timeout            |
 | `--list-ports`   | —                                 | print candidate serial ports and exit     |
 
+## `cloud-vps-smoke.mjs` — VPS pull smoke
+
+Checks the cloud pull architecture without printing secrets:
+
+1. VPS token-source `/health`
+2. VPS token-source authenticated `/tokens_today`
+3. Worker `/health`
+4. Worker manual `POST /ingest/pull`
+5. Worker `/pet/state` matches the VPS token snapshot
+
+The tool loads `bridge/.env` first, so local Worker/device/ingest values do not
+need to be repeated if they are already there. Required environment:
+
+```sh
+CLOUDFLARE_WORKER_URL=... \
+DEVICE_TOKEN=... \
+INGEST_TOKEN=... \
+TOKEN_SOURCE_URL=https://g33k-kid-agent.taild47216.ts.net \
+TOKEN_SOURCE_TOKEN=... \
+node tools/cloud-vps-smoke.mjs
+```
+
+## `rollout-vps-token-source.mjs` — guarded VPS rollout
+
+Prints the exact commands needed to install the token source on the VPS and
+enable Tailscale Funnel. Dry-run is the default.
+
+```sh
+node tools/rollout-vps-token-source.mjs
+node tools/rollout-vps-token-source.mjs --apply --yes
+```
+
+To deploy staging and run the smoke after the VPS service is reachable:
+
+```sh
+CLOUDFLARE_WORKER_URL=... \
+DEVICE_TOKEN=... \
+INGEST_TOKEN=... \
+node tools/rollout-vps-token-source.mjs --apply --yes --deploy-staging
+```
+
 ## Typical dev loop
 
 ```sh

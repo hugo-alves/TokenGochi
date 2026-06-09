@@ -9,7 +9,9 @@ static constexpr uint16_t BG        = 0x0000;  // black
 static constexpr uint16_t FG        = 0xFFFF;  // white
 static constexpr uint16_t DIM       = 0x7BEF;  // grey
 static constexpr uint16_t MOOD_HAPPY  = 0x07E0;  // green
+static constexpr uint16_t MOOD_EXCITED = 0x87F0;  // bright cyan-green
 static constexpr uint16_t MOOD_HUNGRY = 0xFD20;  // amber
+static constexpr uint16_t MOOD_PECKISH = 0xFFE0;  // yellow
 static constexpr uint16_t MOOD_SLEEPY = 0x001F;  // blue
 static constexpr uint16_t MOOD_SICK   = 0xF800;  // red
 
@@ -29,7 +31,11 @@ void flush() {
 
 static uint16_t moodColor(const char* mood) {
     if (!mood) return FG;
+    if (strcmp(mood, "very happy") == 0) return MOOD_EXCITED;
+    if (strcmp(mood, "excited") == 0) return MOOD_EXCITED;
     if (strcmp(mood, "happy")  == 0) return MOOD_HAPPY;
+    if (strcmp(mood, "peckish") == 0) return MOOD_PECKISH;
+    if (strcmp(mood, "very hungry") == 0) return MOOD_HUNGRY;
     if (strcmp(mood, "hungry") == 0) return MOOD_HUNGRY;
     if (strcmp(mood, "sleepy") == 0) return MOOD_SLEEPY;
     if (strcmp(mood, "sick")   == 0) return MOOD_SICK;
@@ -96,6 +102,22 @@ static void centeredText(int y, int size, uint16_t color, const char* s) {
     flush();
 }
 
+static bool hasCodexAccountUsage(const PetState& s) {
+    return s.codex_usage_percent_x10 >= 0;
+}
+
+static void formatUsagePercent(char* out, size_t outSize, const PetState& s) {
+    int x10 = s.codex_usage_percent_x10;
+    if (x10 < 0) x10 = 0;
+    int whole = x10 / 10;
+    int frac = x10 % 10;
+    if (frac == 0) {
+        snprintf(out, outSize, "%d%%", whole);
+    } else {
+        snprintf(out, outSize, "%d.%d%%", whole, frac);
+    }
+}
+
 void drawStatus(const PetState& s, bool wifiUp, bool bridgeUp) {
     target().setTextSize(2);
     target().setTextColor(wifiUp ? FG : DIM, BG);
@@ -105,6 +127,13 @@ void drawStatus(const PetState& s, bool wifiUp, bool bridgeUp) {
         snprintf(line, sizeof(line), "wifi: ?");
     } else if (!bridgeUp) {
         snprintf(line, sizeof(line), "bridge: ?");
+    } else if (hasCodexAccountUsage(s)) {
+        char pct[12];
+        formatUsagePercent(pct, sizeof(pct), s);
+        snprintf(line, sizeof(line), "%s use  %dd %dh",
+                 pct,
+                 (int)(s.age_s / 86400),
+                 (int)((s.age_s % 86400) / 3600));
     } else {
         snprintf(line, sizeof(line), "%ldk tk  %dd %dh",
                  (long)(s.food_today / 1000),
@@ -321,12 +350,22 @@ void drawStats(const PetState& s, int rssi, const char* proxyUrl) {
     y += lineH;
     target().setTextColor(FG, BG);
 
-    snprintf(line, sizeof(line), "today:  %ldk", (long)(s.food_today / 1000));
+    if (hasCodexAccountUsage(s)) {
+        char pct[12];
+        formatUsagePercent(pct, sizeof(pct), s);
+        snprintf(line, sizeof(line), "usage:  %s", pct);
+    } else {
+        snprintf(line, sizeof(line), "today:  %ldk", (long)(s.food_today / 1000));
+    }
     w = target().textWidth(line);
     target().setCursor(SCREEN_CX - w / 2, y); target().print(line);
     y += lineH;
 
-    snprintf(line, sizeof(line), "total:  %ldk", (long)(s.total_tokens_ever / 1000));
+    if (hasCodexAccountUsage(s) && s.codex_plan[0]) {
+        snprintf(line, sizeof(line), "plan:   %s", s.codex_plan);
+    } else {
+        snprintf(line, sizeof(line), "total:  %ldk", (long)(s.total_tokens_ever / 1000));
+    }
     w = target().textWidth(line);
     target().setCursor(SCREEN_CX - w / 2, y); target().print(line);
     y += lineH;

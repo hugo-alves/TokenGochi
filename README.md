@@ -16,7 +16,7 @@ sleepy when you stop, and chat back when you hold the button.
 
 - **M5Stack StopWatch Dev Kit** (C152, ESP32-S3R8, 8 MB PSRAM, 16 MB flash)
   — has 1.75" round AMOLED, 2 buttons, MEMS mic, speaker, vibration motor.
-- **A Mac** (or any Linux box) running Node 18+. Local mode runs `bridge/tamagotchi-bridge.mjs` on LAN; cloud mode runs a Cloudflare worker and uses `bridge/token-ingest.mjs` as outbound publisher.
+- **A Mac or VPS** running Node 18+. Local mode runs `bridge/tamagotchi-bridge.mjs` on LAN; cloud mode runs a Cloudflare Worker and can either receive pushed snapshots from `bridge/token-ingest.mjs` or pull from `bridge/token-source.mjs` on a VPS.
 - **A Groq API key** (free tier is fine) — only needed for `/transcribe`.
 
 ## First-run guide (5 minutes)
@@ -48,12 +48,49 @@ npm install
 npm run deploy:staging       # set D1 IDs/secrets first; see cloudflare/README.md
 ```
 
-Then publish tokens from the Mac:
+Then choose where token totals come from.
+
+By default, the bridge uses the same Codex account-usage source as CodexBar
+when `~/.codex/auth.json` contains OAuth login tokens. That reports subscription
+rate-limit usage as a percentage, not raw local session tokens. TokenGochi maps
+1% account usage to 1000 food units for the backend contract, and the firmware
+displays the account percentage when that metadata is present. If account usage
+is unavailable in `TOKEN_USAGE_SOURCE=auto`, the bridge falls back to local
+Claude/Codex transcript logs.
+
+For Codex account usage, the pet mood is driven by pace against the weekly
+window. TokenGochi uses CodexBar's linear pace fallback: expected usage is the
+elapsed fraction of the reset window, and actual usage is compared against it
+with CodexBar's 2% / 6% / 12% thresholds. Behind pace means you are leaving
+tokens unused, so the pet becomes progressively more hungry; ahead of pace
+makes it progressively happier:
+
+- `slightly_behind` -> `peckish`
+- `behind` -> `hungry`
+- `far_behind` -> `very hungry`
+- `on_track` / `slightly_ahead` -> `happy`
+- `ahead` -> `excited`
+- `far_ahead` -> `very happy`
+
+Push snapshots from the current machine:
 
 ```sh
 cd bridge
 node token-ingest.mjs --once
 ```
+
+Or run a VPS token source and let Cloudflare pull from it:
+
+```sh
+cd bridge
+TOKEN_SOURCE_TOKEN=... node token-source.mjs
+# expose :8790 through Cloudflare Tunnel or Tailscale Funnel
+# set Cloudflare TOKEN_SOURCE_URL to the public HTTPS token-source URL
+```
+
+The VPS Tailscale IP can be used for SSH/operator access, but the Worker needs
+a public HTTPS tunnel/Funnel URL; it cannot fetch a private `100.x` tailnet IP
+directly.
 
 ### 2. Get the backend URL
 
@@ -128,6 +165,8 @@ pio device monitor             # optional: 115200 baud serial log
 | GET    | `/pet/state`   | yes  | —                 | `{mood, age_s, food_today, last_msg, last_msg_ts, total_tokens_ever, audio_runs_today, breakdown, ts}` |
 | POST   | `/transcribe`  | yes  | `audio/wav` bytes | `{text, duration_s, lang, ms_groq}`           |
 | POST   | `/pet/reset`   | yes  | —                 | same shape as `/pet/state` after the reset     |
+| POST   | `/ingest/tokens` | ingest | token snapshot | stores pushed token totals in Cloudflare       |
+| POST   | `/ingest/pull` | ingest | —                 | Cloudflare fetches the configured VPS token source |
 
 ## Architecture (one page)
 
@@ -136,21 +175,21 @@ pio device monitor             # optional: 115200 baud serial log
 |  StopWatch (C152)    | ------------->  |  Cloudflare Worker   | ---------> |  Groq API   |
 |  HTTPS PROXY_URL     |                |  /pet, /transcribe   |            |  Whisper    |
 +----------------------+                +----------------------+            +-------------+
-       |      ^                                                          
-       |      | optional LAN fallback                          
-       |      v                                              
-+----------------------+                               
-| bridge (LAN) +        |                               
-| token-ingest (publish) |                              
-+----------------------+                               
+       |      ^
+       |      | optional LAN fallback
+       |      v
++----------------------+
+| bridge (LAN) +        |
+| token ingest/source   |
++----------------------+
 ```
 
 - **Firmware** (`firmware/`) — PlatformIO + Arduino + M5Unified. State
   machine: `IDLE / RECORDING / TRANSCRIBING / SHOWING / STATS / CONFIRM / ERROR`.
   4-sprite mood faces in `src/sprites.h` (~200 KB RGB565 in flash, PROGMEM).
-- **Bridge fallback** (`bridge/`) — Self-contained `tamagotchi-bridge.mjs` in LAN mode, plus
-  `token-ingest.mjs` which reads local logs and publishes only token totals to
-  Worker `/ingest/tokens`.
+- **Bridge/token source** (`bridge/`) — Self-contained `tamagotchi-bridge.mjs`
+  in LAN mode, plus `token-ingest.mjs` for push publishing and
+  `token-source.mjs` for VPS pull mode.
 - **Cloudflare backend** (`cloudflare/`) — HTTPS API running at public URL and
   persists state in Cloudflare D1. Watch requests now avoid LAN restrictions.
 - **Tools** (`tools/`) — Dev utilities: canned bridge, Mac-mic → bridge, sprite

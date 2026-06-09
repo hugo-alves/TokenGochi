@@ -27,3 +27,4 @@ tools/_artifacts/
 cloudflare/.wrangler/
 cloudflare/dist/
 cloudflare/.dev.vars
+cloudflare/node_modules/

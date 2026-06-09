@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // ============================================================================
-//  Token Tamagotchi — self-contained bridge (no CodexBar dependency)
-//  Reads the local JSONL transcripts that Claude Code and Codex CLI write to
-//  disk, sums today's tokens, and serves:
+//  Token Tamagotchi — self-contained bridge.
+//  Reads either Codex account usage through the same OAuth endpoint CodexBar
+//  uses, or local JSONL transcripts that Claude Code and Codex CLI write to
+//  disk, and serves:
 //    GET  /tokens_today   — { tokens_today, breakdown, ts }
 //    GET  /pet/state      — derived pet stats (mood, age, food, last_msg)
 //    GET  /health         — service status, no auth
@@ -65,6 +66,8 @@ const INCLUDE_CACHE      = true;    // count cache read/creation tokens as "food
 const GROQ_API_KEY       = process.env.GROQ_API_KEY || "";
 const GROQ_WHISPER_MODEL = process.env.GROQ_WHISPER_MODEL || "whisper-large-v3-turbo";
 const GROQ_URL           = process.env.GROQ_URL || "https://api.groq.com/openai/v1/audio/transcriptions";
+const TOKEN_USAGE_SOURCE = (process.env.TOKEN_USAGE_SOURCE || "auto").trim().toLowerCase();
+const CODEX_USAGE_SCALE  = Math.max(1, parseInt(process.env.CODEX_USAGE_SCALE || "1000", 10));
 const VERSION            = "0.2.0";
 
 // ---------------------------------------------------------------- dates ------
@@ -80,6 +83,16 @@ function startOfTodayMs() {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
   return d.getTime();
+}
+function clampPercent(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.min(100, n));
+}
+function clamp(v, lower, upper) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return lower;
+  return Math.max(lower, Math.min(upper, n));
 }
 
 // ---------------------------------------------------------------- state ------
@@ -150,7 +163,17 @@ function recordTranscription(text) {
 
 // ---------------------------------------------------------------- mood -------
 // Rule-based. See PLAN.md §4.2.
-function computeMood(foodToday, now = new Date()) {
+export function computeMood(foodToday, now = new Date(), usage = null) {
+  const paceStage = usage?.codex?.pace?.stage || null;
+  if (paceStage) {
+    if (paceStage === "far_behind") return "very hungry";
+    if (paceStage === "behind") return "hungry";
+    if (paceStage === "slightly_behind") return "peckish";
+    if (paceStage === "far_ahead") return "very happy";
+    if (paceStage === "ahead") return "excited";
+    if (paceStage === "slightly_ahead" || paceStage === "on_track") return "happy";
+  }
+
   const h = now.getHours();
   if (h < 7 || h >= 23) return "sleepy";
   if (foodToday === 0 && h >= 22) return "sick";
@@ -309,6 +332,10 @@ function codexHomes() {
   return raw.split(",").map((s) => s.trim()).filter(Boolean);
 }
 
+function primaryCodexHome() {
+  return codexHomes()[0] || join(homedir(), ".codex");
+}
+
 export function codexCumulative(p) {
   if (!p || typeof p !== "object") return null;
   if (p.total_token_usage && typeof p.total_token_usage === "object") {
@@ -376,6 +403,207 @@ async function computeCodex() {
   return total;
 }
 
+// ----------------------------------------------------------- Codex account ---
+// Matches CodexBar's OAuth strategy:
+//   ~/.codex/auth.json -> https://auth.openai.com/oauth/token when stale
+//   Bearer token       -> https://chatgpt.com/backend-api/wham/usage
+// The API reports account/subscription usage as percentages, not raw tokens.
+const CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
+const CODEX_OAUTH_REFRESH_URL = "https://auth.openai.com/oauth/token";
+const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+
+function parseCodexLastRefresh(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function readCodexAuth() {
+  const authPath = join(primaryCodexHome(), "auth.json");
+  let json;
+  try {
+    json = JSON.parse(readFileSync(authPath, "utf8"));
+  } catch (err) {
+    throw new Error(`Codex auth.json unavailable at ${authPath}: ${err.message || err}`);
+  }
+  const tokens = json.tokens || {};
+  const accessToken = tokens.access_token || tokens.accessToken || json.OPENAI_API_KEY || "";
+  const refreshToken = tokens.refresh_token || tokens.refreshToken || "";
+  const idToken = tokens.id_token || tokens.idToken || "";
+  const accountId = tokens.account_id || tokens.accountId || "";
+  if (!accessToken) throw new Error("Codex auth.json has no access token");
+  return {
+    authPath,
+    accessToken,
+    refreshToken,
+    idToken,
+    accountId,
+    lastRefresh: parseCodexLastRefresh(json.last_refresh),
+    raw: json,
+  };
+}
+
+async function refreshCodexAuth(credentials) {
+  if (!credentials.refreshToken) return credentials;
+  const res = await fetch(CODEX_OAUTH_REFRESH_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      client_id: CODEX_OAUTH_CLIENT_ID,
+      grant_type: "refresh_token",
+      refresh_token: credentials.refreshToken,
+      scope: "openid profile email",
+    }),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Codex OAuth refresh failed ${res.status}: ${text.slice(0, 200)}`);
+
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error("Codex OAuth refresh returned invalid JSON");
+  }
+
+  const next = {
+    ...credentials,
+    accessToken: payload.access_token || credentials.accessToken,
+    refreshToken: payload.refresh_token || credentials.refreshToken,
+    idToken: payload.id_token || credentials.idToken,
+    lastRefresh: new Date(),
+  };
+
+  const saved = { ...credentials.raw };
+  saved.tokens = {
+    ...(saved.tokens || {}),
+    access_token: next.accessToken,
+    refresh_token: next.refreshToken,
+  };
+  if (next.idToken) saved.tokens.id_token = next.idToken;
+  if (next.accountId) saved.tokens.account_id = next.accountId;
+  saved.last_refresh = next.lastRefresh.toISOString();
+  writeFileSync(credentials.authPath, JSON.stringify(saved, null, 2));
+  return next;
+}
+
+async function loadFreshCodexAuth() {
+  let credentials = readCodexAuth();
+  const staleAfterMs = 8 * 24 * 60 * 60 * 1000;
+  if (credentials.lastRefresh && Date.now() - credentials.lastRefresh.getTime() <= staleAfterMs) {
+    return credentials;
+  }
+  return refreshCodexAuth(credentials);
+}
+
+export function paceStage(deltaPercent) {
+  const delta = Number(deltaPercent);
+  if (!Number.isFinite(delta)) return null;
+  const abs = Math.abs(delta);
+  if (abs <= 2) return "on_track";
+  if (abs <= 6) return delta >= 0 ? "slightly_ahead" : "slightly_behind";
+  if (abs <= 12) return delta >= 0 ? "ahead" : "behind";
+  return delta >= 0 ? "far_ahead" : "far_behind";
+}
+
+export function accountUsagePace(window, nowMs = Date.now()) {
+  if (!window || typeof window !== "object") return null;
+  const actual = clampPercent(window.used_percent);
+  const resetAt = Number(window.reset_at);
+  const duration = Number(window.limit_window_seconds);
+  if (actual == null || !Number.isFinite(resetAt) || !Number.isFinite(duration) || duration <= 0) return null;
+
+  const nowSec = nowMs / 1000;
+  const timeUntilReset = resetAt - nowSec;
+  if (timeUntilReset <= 0 || timeUntilReset > duration) return null;
+
+  const elapsed = clamp(duration - timeUntilReset, 0, duration);
+  if (elapsed === 0 && actual > 0) return null;
+  const expected = clamp((elapsed / duration) * 100, 0, 100);
+  const delta = actual - expected;
+
+  let etaSeconds = null;
+  let willLastToReset = false;
+  if (elapsed > 0 && actual > 0) {
+    const rate = actual / elapsed;
+    if (rate > 0) {
+      const candidate = Math.max(0, 100 - actual) / rate;
+      if (candidate >= timeUntilReset) willLastToReset = true;
+      else etaSeconds = Math.max(0, Math.round(candidate));
+    }
+  } else if (elapsed > 0 && actual === 0) {
+    willLastToReset = true;
+  }
+
+  return {
+    stage: paceStage(delta),
+    delta_percent: Math.round(delta * 10) / 10,
+    expected_used_percent: Math.round(expected * 10) / 10,
+    actual_used_percent: Math.round(actual * 10) / 10,
+    eta_seconds: etaSeconds,
+    will_last_to_reset: willLastToReset,
+  };
+}
+
+export function accountUsageMetadata(usage) {
+  const primary = usage?.rate_limit?.primary_window || null;
+  const secondary = usage?.rate_limit?.secondary_window || null;
+  const primaryPercent = clampPercent(primary?.used_percent);
+  const secondaryPercent = clampPercent(secondary?.used_percent);
+  const metricPercent = primaryPercent != null && secondaryPercent != null
+    ? (primaryPercent + secondaryPercent) / 2
+    : (primaryPercent ?? secondaryPercent ?? 0);
+  const additional = Array.isArray(usage?.additional_rate_limits)
+    ? usage.additional_rate_limits.map((item) => ({
+        limit_name: item?.limit_name || null,
+        metered_feature: item?.metered_feature || null,
+        primary_used_percent: clampPercent(item?.rate_limit?.primary_window?.used_percent),
+        secondary_used_percent: clampPercent(item?.rate_limit?.secondary_window?.used_percent),
+        primary_reset_at: item?.rate_limit?.primary_window?.reset_at || null,
+        secondary_reset_at: item?.rate_limit?.secondary_window?.reset_at || null,
+      }))
+    : [];
+  return {
+    source: "codex_account",
+    plan_type: usage?.plan_type || null,
+    primary_used_percent: primaryPercent,
+    secondary_used_percent: secondaryPercent,
+    metric_used_percent: metricPercent,
+    primary_reset_at: primary?.reset_at || null,
+    secondary_reset_at: secondary?.reset_at || null,
+    pace: accountUsagePace(secondary),
+    synthetic_tokens_per_percent: CODEX_USAGE_SCALE,
+    additional_rate_limits: additional,
+  };
+}
+
+async function computeCodexAccountUsage() {
+  const credentials = await loadFreshCodexAuth();
+  const headers = {
+    authorization: `Bearer ${credentials.accessToken}`,
+    accept: "application/json",
+    "user-agent": "TokenGochi",
+  };
+  if (credentials.accountId) headers["ChatGPT-Account-Id"] = credentials.accountId;
+
+  const res = await fetch(CODEX_USAGE_URL, { headers });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Codex usage API failed ${res.status}: ${text.slice(0, 200)}`);
+
+  let usage;
+  try {
+    usage = JSON.parse(text);
+  } catch {
+    throw new Error("Codex usage API returned invalid JSON");
+  }
+
+  const metadata = accountUsageMetadata(usage);
+  const codex = Math.round(metadata.metric_used_percent * CODEX_USAGE_SCALE);
+  return {
+    codex,
+    metadata,
+  };
+}
+
 // ------------------------------------------------------------- aggregate -----
 let cache = { at: 0, payload: null };
 
@@ -383,10 +611,26 @@ async function tokensToday() {
   if (cache.payload && Date.now() - cache.at < CACHE_MS) return cache.payload;
 
   const seen = new Set();
-  const [claude, codex] = await Promise.all([computeClaude(seen), computeCodex()]);
+  const claudePromise = computeClaude(seen);
+  let codexPromise;
+  if (TOKEN_USAGE_SOURCE === "codex-account" || TOKEN_USAGE_SOURCE === "account" || TOKEN_USAGE_SOURCE === "auto") {
+    codexPromise = computeCodexAccountUsage().catch(async (err) => {
+      if (TOKEN_USAGE_SOURCE !== "auto") throw err;
+      console.error(`Codex account usage unavailable, falling back to local logs: ${err.message || err}`);
+      return { codex: await computeCodex(), metadata: { source: "local_logs_fallback", error: String(err.message || err) } };
+    });
+  } else {
+    codexPromise = computeCodex().then((codex) => ({ codex, metadata: { source: "local_logs" } }));
+  }
+  const [claude, codexResult] = await Promise.all([claudePromise, codexPromise]);
+  const codex = codexResult.codex;
   const payload = {
     tokens_today: claude + codex,
     breakdown: { claude, codex },
+    usage: {
+      source: codexResult.metadata?.source || "local_logs",
+      codex: codexResult.metadata,
+    },
     ts: Math.floor(Date.now() / 1000),
   };
   cache = { at: Date.now(), payload };
@@ -398,7 +642,7 @@ async function petState() {
   bumpTotals(t.tokens_today);
   const s = loadState();
   return {
-    mood: computeMood(t.tokens_today),
+    mood: computeMood(t.tokens_today, new Date(), t.usage),
     age_s: Math.max(0, Math.floor(Date.now() / 1000) - s.pet_birth_ts),
     food_today: t.tokens_today,
     last_msg: s.last_msg,
@@ -406,6 +650,7 @@ async function petState() {
     total_tokens_ever: s.total_tokens_ever,
     audio_runs_today: s.audio_runs_today,
     breakdown: t.breakdown,
+    usage: t.usage,
     ts: t.ts,
   };
 }
@@ -425,7 +670,7 @@ async function main() {
     const s = loadState();
     console.log(JSON.stringify({
       tokens: t,
-      pet: { ...s, mood: computeMood(t.tokens_today) },
+      pet: { ...s, mood: computeMood(t.tokens_today, new Date(), t.usage) },
     }, null, 2));
     return;
   }

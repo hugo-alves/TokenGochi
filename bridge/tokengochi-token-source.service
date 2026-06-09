@@ -1,0 +1,15 @@
+[Unit]
+Description=TokenGochi VPS token source
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__BRIDGE_DIR__
+EnvironmentFile=__ENV_FILE__
+ExecStart=__NODE_BIN__ __BRIDGE_DIR__/token-source.mjs
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
