@@ -1,6 +1,7 @@
 #include "pet_sprite.h"
 #include "config.h"
 #include "sprites.h"
+#include "ui.h"
 
 #include <M5Unified.h>
 #include <string.h>
@@ -29,8 +30,12 @@ void drawCentered(uint8_t moodIdx, uint8_t frame) {
     // pushImage copies the 16-bit RGB565 pixels from PROGMEM straight to
     // the framebuffer. `transparent` would chroma-key a color, but we
     // rely on the sprite's BG (0x0000) matching the disc BG instead.
-    M5.Display.pushImage(x, y, PET_SPRITE_W, PET_SPRITE_H,
-                         pet_sprites[moodIdx * PET_SPRITE_FRAMES + frame]);
+    bool oldSwap = ui::target().getSwapBytes();
+    ui::target().setSwapBytes(true);
+    ui::target().pushImage(x, y, PET_SPRITE_W, PET_SPRITE_H,
+                           pet_sprites[moodIdx * PET_SPRITE_FRAMES + frame]);
+    ui::target().setSwapBytes(oldSwap);
+    ui::flush();
 }
 
 bool tickBlink() {

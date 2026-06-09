@@ -13,6 +13,20 @@ static constexpr uint16_t MOOD_HUNGRY = 0xFD20;  // amber
 static constexpr uint16_t MOOD_SLEEPY = 0x001F;  // blue
 static constexpr uint16_t MOOD_SICK   = 0xF800;  // red
 
+static M5Canvas g_canvas(&M5.Display);
+static bool g_canvasReady = false;
+
+lgfx::LGFXBase& target() {
+    return g_canvasReady ? static_cast<lgfx::LGFXBase&>(g_canvas)
+                         : static_cast<lgfx::LGFXBase&>(M5.Display);
+}
+
+void flush() {
+    if (g_canvasReady) {
+        g_canvas.pushSprite(0, 0);
+    }
+}
+
 static uint16_t moodColor(const char* mood) {
     if (!mood) return FG;
     if (strcmp(mood, "happy")  == 0) return MOOD_HAPPY;
@@ -22,46 +36,69 @@ static uint16_t moodColor(const char* mood) {
     return FG;
 }
 
-// Build a circular sprite and use it as a clip mask so subsequent draws
-// to the main canvas are auto-clipped to the disc.
 static void applyDiscClip() {
-    static LGFX_Sprite* mask = nullptr;
-    if (!mask) {
-        mask = new LGFX_Sprite(&M5.Display);
-        mask->setColorDepth(8);
-        mask->createSprite(SCREEN_W, SCREEN_H);
-        mask->fillSprite(0);          // transparent everywhere
-        mask->fillCircle(SCREEN_CX, SCREEN_CY, SCREEN_R, 1);  // opaque disc
-    }
-    M5.Display.setClipRect(0, 0, SCREEN_W, SCREEN_H);
-    // LGFX doesn't have a built-in mask API; we draw a black-filled
-    // background inside the disc every frame (clearToBlack does that).
+    target().setClipRect(0, 0, SCREEN_W, SCREEN_H);
 }
 
 void init() {
+    g_canvas.setColorDepth(16);
+    g_canvasReady = g_canvas.createSprite(SCREEN_W, SCREEN_H) != nullptr;
+    if (!g_canvasReady) {
+        Serial.println("[screen] PSRAM mirror allocation failed; TGSHOT unavailable");
+    }
     applyDiscClip();
-    M5.Display.setTextDatum(TL_DATUM);
+    target().setClipRect(0, 0, SCREEN_W, SCREEN_H);
+    target().setTextDatum(TL_DATUM);
+}
+
+bool writeScreenshot(Stream& out) {
+    if (!g_canvasReady || g_canvas.getBuffer() == nullptr) {
+        out.print("TGSHOT ERR no-canvas\n");
+        out.flush();
+        return false;
+    }
+
+    const size_t byteCount = (size_t)SCREEN_W * (size_t)SCREEN_H * 2;
+    out.printf("TGSHOT BEGIN %d %d RGB565BE %u\n",
+               SCREEN_W, SCREEN_H, (unsigned)byteCount);
+    out.flush();
+
+    const uint8_t* data = static_cast<const uint8_t*>(g_canvas.getBuffer());
+    size_t sent = 0;
+    while (sent < byteCount) {
+        const size_t chunk = min((size_t)1024, byteCount - sent);
+        out.write(data + sent, chunk);
+        sent += chunk;
+        out.flush();
+        delay(1);
+    }
+
+    out.print("\nTGSHOT END\n");
+    out.flush();
+    return true;
 }
 
 void clearToBlack() {
-    M5.Display.fillScreen(BG);
+    target().fillScreen(BG);
     // Re-paint the disc area only (already black) so we don't see chassis pixels.
-    M5.Display.fillCircle(SCREEN_CX, SCREEN_CY, SCREEN_R, BG);
+    target().fillCircle(SCREEN_CX, SCREEN_CY, SCREEN_R, BG);
+    flush();
 }
 
 static void centeredText(int y, int size, uint16_t color, const char* s) {
-    M5.Display.setTextSize(size);
-    M5.Display.setTextColor(color, BG);
-    int w = M5.Display.textWidth(s);
-    int h = M5.Display.fontHeight();
-    M5.Display.setCursor(SCREEN_CX - w / 2, y);
-    M5.Display.print(s);
+    target().setTextSize(size);
+    target().setTextColor(color, BG);
+    int w = target().textWidth(s);
+    int h = target().fontHeight();
+    target().setCursor(SCREEN_CX - w / 2, y);
+    target().print(s);
     (void)h;
+    flush();
 }
 
 void drawStatus(const PetState& s, bool wifiUp, bool bridgeUp) {
-    M5.Display.setTextSize(2);
-    M5.Display.setTextColor(wifiUp ? FG : DIM, BG);
+    target().setTextSize(2);
+    target().setTextColor(wifiUp ? FG : DIM, BG);
 
     char line[64];
     if (!wifiUp) {
@@ -74,9 +111,10 @@ void drawStatus(const PetState& s, bool wifiUp, bool bridgeUp) {
                  (int)(s.age_s / 86400),
                  (int)((s.age_s % 86400) / 3600));
     }
-    int w = M5.Display.textWidth(line);
-    M5.Display.setCursor(SCREEN_CX - w / 2, 20);
-    M5.Display.print(line);
+    int w = target().textWidth(line);
+    target().setCursor(SCREEN_CX - w / 2, 20);
+    target().print(line);
+    flush();
 }
 
 void drawMood(const PetState& s) {
@@ -86,41 +124,43 @@ void drawMood(const PetState& s) {
                              pet_sprite::currentFrame());
 
     // Mood label as small text just above the sprite
-    M5.Display.setTextSize(2);
-    M5.Display.setTextColor(moodColor(s.mood), BG);
+    target().setTextSize(2);
+    target().setTextColor(moodColor(s.mood), BG);
     const char* lbl = s.mood;
-    int lw = M5.Display.textWidth(lbl);
-    M5.Display.setCursor(SCREEN_CX - lw / 2, SCREEN_CY - PET_SPRITE_H / 2 - 24);
-    M5.Display.print(lbl);
+    int lw = target().textWidth(lbl);
+    target().setCursor(SCREEN_CX - lw / 2, SCREEN_CY - PET_SPRITE_H / 2 - 24);
+    target().print(lbl);
 
     // Last message as a single subtitle line, truncated with ellipsis.
     if (s.last_msg[0]) {
         char sub[40];
         snprintf(sub, sizeof(sub), "\"%s\"", s.last_msg);
-        if ((int)M5.Display.textWidth(sub) > 360) {
+        if ((int)target().textWidth(sub) > 360) {
             int n = (int)strlen(sub);
-            while (n > 6 && (int)M5.Display.textWidth(sub) > 360) {
+            while (n > 6 && (int)target().textWidth(sub) > 360) {
                 sub[--n] = '\0';
                 sub[n - 1] = sub[n - 2] = sub[n - 3] = '.';
             }
         }
-        M5.Display.setTextSize(2);
-        M5.Display.setTextColor(DIM, BG);
-        int w = M5.Display.textWidth(sub);
-        M5.Display.setCursor(SCREEN_CX - w / 2, SCREEN_CY + PET_SPRITE_H / 2 + 12);
-        M5.Display.print(sub);
+        target().setTextSize(2);
+        target().setTextColor(DIM, BG);
+        int w = target().textWidth(sub);
+        target().setCursor(SCREEN_CX - w / 2, SCREEN_CY + PET_SPRITE_H / 2 + 12);
+        target().print(sub);
     }
+    flush();
 }
 
 void drawOffline(const char* reason) {
     centeredText(SCREEN_CY - 20, 4, DIM, "bridge ?");
     if (reason) {
-        M5.Display.setTextSize(2);
-        M5.Display.setTextColor(DIM, BG);
-        int w = M5.Display.textWidth(reason);
-        M5.Display.setCursor(SCREEN_CX - w / 2, SCREEN_CY + 20);
-        M5.Display.print(reason);
+        target().setTextSize(2);
+        target().setTextColor(DIM, BG);
+        int w = target().textWidth(reason);
+        target().setCursor(SCREEN_CX - w / 2, SCREEN_CY + 20);
+        target().print(reason);
     }
+    flush();
 }
 
 // ---------------------------------------------------------------- pager ------
@@ -174,8 +214,8 @@ void drawTranscript(const char* text) {
     s_showingTranscript = true;
 
     // Render this page
-    M5.Display.setTextSize(2);
-    M5.Display.setTextColor(FG, BG);
+    target().setTextSize(2);
+    target().setTextColor(FG, BG);
     const int lineH = 22;  // approx line height for size 2
     const int topY  = 36;
 
@@ -203,8 +243,8 @@ void drawTranscript(const char* text) {
         memcpy(line, s_ownedText + pos, n);
         line[n] = '\0';
         // crude centering-ish: just left-aligned
-        M5.Display.setCursor(SCREEN_CX - maxCharsPerLine() * 12 / 2, y);
-        M5.Display.print(line);
+        target().setCursor(SCREEN_CX - maxCharsPerLine() * 12 / 2, y);
+        target().print(line);
         pos = end;
         y += lineH;
     }
@@ -213,145 +253,162 @@ void drawTranscript(const char* text) {
     if (s_pageCount > 1) {
         char hint[16];
         snprintf(hint, sizeof(hint), "%d/%d", s_pageIndex + 1, s_pageCount);
-        int w = M5.Display.textWidth(hint);
-        M5.Display.setTextColor(DIM, BG);
-        M5.Display.setCursor(SCREEN_CX - w / 2, SCREEN_H - 24);
-        M5.Display.print(hint);
+        int w = target().textWidth(hint);
+        target().setTextColor(DIM, BG);
+        target().setCursor(SCREEN_CX - w / 2, SCREEN_H - 24);
+        target().print(hint);
     }
+    flush();
 }
 
 // ---------------------------------------------------------------- recording --
+void drawArming() {
+    target().setTextSize(2);
+    target().setTextColor(DIM, BG);
+    const char* label = "getting ready";
+    int w = target().textWidth(label);
+    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 12);
+    target().print(label);
+    flush();
+}
+
 void drawRec(uint32_t elapsedS) {
-    M5.Display.setTextSize(3);
-    M5.Display.setTextColor(0xF800, BG);  // red
+    target().setTextSize(3);
+    target().setTextColor(0xF800, BG);  // red
     const char* label = "REC";
-    int w = M5.Display.textWidth(label);
-    M5.Display.setCursor(SCREEN_CX - w / 2, 30);
-    M5.Display.print(label);
+    int w = target().textWidth(label);
+    target().setCursor(SCREEN_CX - w / 2, 30);
+    target().print(label);
 
     char t[16];
     snprintf(t, sizeof(t), "%lus", (unsigned long)elapsedS);
-    M5.Display.setTextSize(2);
-    w = M5.Display.textWidth(t);
-    M5.Display.setCursor(SCREEN_CX - w / 2, 80);
-    M5.Display.print(t);
+    target().setTextSize(2);
+    w = target().textWidth(t);
+    target().setCursor(SCREEN_CX - w / 2, 80);
+    target().print(t);
 
     // "bar" that pulses — width based on millis
     int wBar = 100 + (millis() / 8) % 200;
-    M5.Display.fillRoundRect(SCREEN_CX - wBar / 2, 360, wBar, 8, 4, 0xF800);
+    target().fillRoundRect(SCREEN_CX - wBar / 2, 360, wBar, 8, 4, 0xF800);
+    flush();
 }
 
 // ---------------------------------------------------------------- thinking ---
 void drawThinking() {
-    M5.Display.setTextSize(3);
-    M5.Display.setTextColor(DIM, BG);
-    const char* label = "...";
-    int w = M5.Display.textWidth(label);
-    M5.Display.setCursor(SCREEN_CX - w / 2, SCREEN_CY);
-    M5.Display.print(label);
+    target().setTextSize(2);
+    target().setTextColor(DIM, BG);
+    const char* label = "sending...";
+    int w = target().textWidth(label);
+    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 12);
+    target().print(label);
+    flush();
 }
 
 // ---------------------------------------------------------------- stats ------
 void drawStats(const PetState& s, int rssi, const char* proxyUrl) {
-    M5.Display.setTextSize(2);
-    M5.Display.setTextColor(FG, BG);
+    target().setTextSize(2);
+    target().setTextColor(FG, BG);
 
     char line[40];
     int y = 30;
     int lineH = 28;
 
     // Header
-    M5.Display.setTextColor(moodColor(s.mood), BG);
+    target().setTextColor(moodColor(s.mood), BG);
     snprintf(line, sizeof(line), "stats: %s", s.mood);
-    int w = M5.Display.textWidth(line);
-    M5.Display.setCursor(SCREEN_CX - w / 2, y); M5.Display.print(line);
+    int w = target().textWidth(line);
+    target().setCursor(SCREEN_CX - w / 2, y); target().print(line);
     y += lineH;
-    M5.Display.setTextColor(FG, BG);
+    target().setTextColor(FG, BG);
 
     snprintf(line, sizeof(line), "today:  %ldk", (long)(s.food_today / 1000));
-    w = M5.Display.textWidth(line);
-    M5.Display.setCursor(SCREEN_CX - w / 2, y); M5.Display.print(line);
+    w = target().textWidth(line);
+    target().setCursor(SCREEN_CX - w / 2, y); target().print(line);
     y += lineH;
 
     snprintf(line, sizeof(line), "total:  %ldk", (long)(s.total_tokens_ever / 1000));
-    w = M5.Display.textWidth(line);
-    M5.Display.setCursor(SCREEN_CX - w / 2, y); M5.Display.print(line);
+    w = target().textWidth(line);
+    target().setCursor(SCREEN_CX - w / 2, y); target().print(line);
     y += lineH;
 
     snprintf(line, sizeof(line), "chats:  %d", s.audio_runs_today);
-    w = M5.Display.textWidth(line);
-    M5.Display.setCursor(SCREEN_CX - w / 2, y); M5.Display.print(line);
+    w = target().textWidth(line);
+    target().setCursor(SCREEN_CX - w / 2, y); target().print(line);
     y += lineH;
 
     snprintf(line, sizeof(line), "rssi:   %d dBm", rssi);
-    w = M5.Display.textWidth(line);
-    M5.Display.setCursor(SCREEN_CX - w / 2, y); M5.Display.print(line);
+    w = target().textWidth(line);
+    target().setCursor(SCREEN_CX - w / 2, y); target().print(line);
     y += lineH;
 
     // Truncate URL visually by skipping the scheme
     const char* host = strstr(proxyUrl, "://");
     host = host ? host + 3 : proxyUrl;
     snprintf(line, sizeof(line), "bridge: %s", host);
-    w = M5.Display.textWidth(line);
-    M5.Display.setCursor(SCREEN_CX - w / 2, y); M5.Display.print(line);
+    w = target().textWidth(line);
+    target().setCursor(SCREEN_CX - w / 2, y); target().print(line);
     y += lineH;
 
     drawHintLine("hold B to reset  |  A: home");
+    flush();
 }
 
 void drawHintLine(const char* s) {
-    M5.Display.setTextSize(1);
-    M5.Display.setTextColor(DIM, BG);
-    int w = M5.Display.textWidth(s);
-    M5.Display.setCursor(SCREEN_CX - w / 2, SCREEN_H - 18);
-    M5.Display.print(s);
+    target().setTextSize(1);
+    target().setTextColor(DIM, BG);
+    int w = target().textWidth(s);
+    target().setCursor(SCREEN_CX - w / 2, SCREEN_H - 18);
+    target().print(s);
+    flush();
 }
 
 void drawGreeting(const char* lastMsg) {
-    M5.Display.setTextSize(2);
-    M5.Display.setTextColor(DIM, BG);
-    M5.Display.setCursor(SCREEN_CX - M5.Display.textWidth("last heard:") / 2, 60);
-    M5.Display.print("last heard:");
+    target().setTextSize(2);
+    target().setTextColor(DIM, BG);
+    target().setCursor(SCREEN_CX - target().textWidth("last heard:") / 2, 60);
+    target().print("last heard:");
 
-    M5.Display.setTextSize(2);
-    M5.Display.setTextColor(FG, BG);
+    target().setTextSize(2);
+    target().setTextColor(FG, BG);
     int y = 100;
     char buf[64];
     snprintf(buf, sizeof(buf), "\"%s\"", lastMsg);
-    int w = M5.Display.textWidth(buf);
+    int w = target().textWidth(buf);
     if (w > 360) {
         // crude truncation with ellipsis
         int n = (int)strlen(buf);
-        while (n > 6 && M5.Display.textWidth(buf) > 360) {
+        while (n > 6 && target().textWidth(buf) > 360) {
             buf[--n] = '\0';
             buf[n - 1] = buf[n - 2] = buf[n - 3] = '.';
         }
-        w = M5.Display.textWidth(buf);
+        w = target().textWidth(buf);
     }
-    M5.Display.setCursor(SCREEN_CX - w / 2, y);
-    M5.Display.print(buf);
+    target().setCursor(SCREEN_CX - w / 2, y);
+    target().print(buf);
+    flush();
 }
 
 void drawConfirmReset() {
-    M5.Display.setTextSize(3);
-    M5.Display.setTextColor(0xFD20, BG);   // amber
+    target().setTextSize(3);
+    target().setTextColor(0xFD20, BG);   // amber
     const char* q = "reset pet?";
-    int w = M5.Display.textWidth(q);
-    M5.Display.setCursor(SCREEN_CX - w / 2, SCREEN_CY - 30);
-    M5.Display.print(q);
+    int w = target().textWidth(q);
+    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 30);
+    target().print(q);
 
-    M5.Display.setTextSize(2);
-    M5.Display.setTextColor(0x07E0, BG);   // green
+    target().setTextSize(2);
+    target().setTextColor(0x07E0, BG);   // green
     const char* yes = "A: yes";
-    w = M5.Display.textWidth(yes);
-    M5.Display.setCursor(SCREEN_CX - 60, SCREEN_CY + 20);
-    M5.Display.print(yes);
+    w = target().textWidth(yes);
+    target().setCursor(SCREEN_CX - 60, SCREEN_CY + 20);
+    target().print(yes);
 
-    M5.Display.setTextColor(0xF800, BG);   // red
+    target().setTextColor(0xF800, BG);   // red
     const char* no = "B: no";
-    w = M5.Display.textWidth(no);
-    M5.Display.setCursor(SCREEN_CX + 20, SCREEN_CY + 20);
-    M5.Display.print(no);
+    w = target().textWidth(no);
+    target().setCursor(SCREEN_CX + 20, SCREEN_CY + 20);
+    target().print(no);
+    flush();
 }
 
 }  // namespace ui

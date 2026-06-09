@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tokengochi.ingest</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE_BIN__</string>
+    <string>__BRIDGE_DIR__/token-ingest.mjs</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__BRIDGE_DIR__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+    <key>Crashed</key>
+    <true/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__BRIDGE_DIR__/ingest.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>__BRIDGE_DIR__/ingest.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>NODE_ENV</key>
+    <string>production</string>
+    <key>CLOUDFLARE_WORKER_URL</key>
+    <string>__WORKER_URL__</string>
+    <key>INGEST_TOKEN</key>
+    <string>__INGEST_TOKEN__</string>
+    <key>INGEST_INTERVAL_MS</key>
+    <string>__INGEST_INTERVAL_MS__</string>
+  </dict>
+</dict>
+</plist>

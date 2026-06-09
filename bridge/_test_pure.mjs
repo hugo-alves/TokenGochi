@@ -4,6 +4,7 @@ import { strict as assert } from "node:assert";
 import { readFileSync, writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { codexCumulative } from "./tamagotchi-bridge.mjs";
 
 // --- mood (re-implemented here; the live one is module-private) ------------
 function computeMood(foodToday, now = new Date()) {
@@ -67,5 +68,28 @@ assert.equal(load().total_tokens_ever, 45_000, "decrease ignored");
 assert.equal(load().peak_today_today, 45_000);
 
 console.log("bumpTotals: 4/4 ok");
+
+// --- Codex token_count schema ----------------------------------------------
+assert.equal(
+  codexCumulative({
+    total_token_usage: {
+      input_tokens: 60_226,
+      cached_input_tokens: 29_440,
+      output_tokens: 869,
+      reasoning_output_tokens: 214,
+      total_tokens: 61_095,
+    },
+    last_token_usage: {
+      input_tokens: 34_189,
+      cached_input_tokens: 25_984,
+      output_tokens: 462,
+      reasoning_output_tokens: 65,
+      total_tokens: 34_651,
+    },
+  }),
+  61_095,
+  "Codex event_msg token_count info.total_token_usage is cumulative"
+);
+console.log("codexCumulative: 1/1 ok");
 
 console.log("\nAll logic tests passed.");

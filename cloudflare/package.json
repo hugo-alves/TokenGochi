@@ -1,0 +1,18 @@
+{
+  "name": "tokengochi-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:staging": "wrangler dev --env staging",
+    "dev:production": "wrangler dev --env production",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:production": "wrangler deploy --env production",
+    "build": "wrangler deploy --dry-run --outdir dist --env staging"
+  },
+  "devDependencies": {
+    "wrangler": "^4.34.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

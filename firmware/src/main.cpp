@@ -28,24 +28,46 @@ static uint32_t     g_statsAtMs = 0;       // when stats view opened
 static uint32_t     g_greetingUntilMs = 0; // hide greeting after this
 static bool         g_greetOnFirstPoll = true;
 
-static constexpr uint32_t RECORD_HOLD_MS = 600;  // hold A this long to start
 static constexpr uint32_t ERROR_HOLD_MS  = 3000; // show error then return
 static constexpr uint32_t STATS_TIMEOUT_MS = 8000; // auto-dismiss stats view
 static constexpr uint32_t CONFIRM_TIMEOUT_MS = 5000;
 static constexpr uint32_t GREETING_HOLD_MS = 3000;
-static constexpr uint32_t HTTP_TIMEOUT_MS_LONG = 15000; // Groq can be slow
 
 // --- helpers ---------------------------------------------------------------
 static void drawBootScreen(const char* line2, uint16_t color) {
-    M5.Display.setTextSize(2);
-    M5.Display.setTextColor(0xFFFF, 0x0000);
-    M5.Display.setCursor(20, 20);
-    M5.Display.print("token tamagotchi");
-    M5.Display.setCursor(20, 50);
-    M5.Display.printf("ssid: %s", WIFI_SSID);
-    M5.Display.setCursor(20, 80);
-    M5.Display.setTextColor(color, 0x0000);
-    M5.Display.print(line2);
+    ui::target().setTextSize(2);
+    ui::target().setTextColor(0xFFFF, 0x0000);
+    ui::target().setCursor(20, 20);
+    ui::target().print("token tamagotchi");
+    ui::target().setCursor(20, 50);
+    ui::target().printf("ssid: %s", WIFI_SSID);
+    ui::target().setCursor(20, 80);
+    ui::target().setTextColor(color, 0x0000);
+    ui::target().print(line2);
+    ui::flush();
+}
+
+static void handleSerialCommands() {
+    static char line[32];
+    static size_t len = 0;
+
+    while (Serial.available()) {
+        char c = (char)Serial.read();
+        if (c == '\r') continue;
+        if (c == '\n') {
+            line[len] = '\0';
+            if (strcmp(line, "TGSHOT") == 0) {
+                ui::writeScreenshot(Serial);
+            }
+            len = 0;
+            continue;
+        }
+        if (len < sizeof(line) - 1) {
+            line[len++] = c;
+        } else {
+            len = 0;
+        }
+    }
 }
 
 static void connectWifi() {
@@ -54,16 +76,26 @@ static void connectWifi() {
         switch (e) {
             case ARDUINO_EVENT_WIFI_STA_START:       Serial.println("[wifi] STA start"); break;
             case ARDUINO_EVENT_WIFI_STA_CONNECTED:  Serial.printf("[wifi] connected to AP (channel %d)\n", info.wifi_sta_connected.channel); break;
-            case ARDUINO_EVENT_WIFI_STA_GOT_IP:     Serial.printf("[wifi] got ip: %s\n", WiFi.localIP().toString().c_str()); break;
+            case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+                g_wifiUp = true;
+                Serial.printf("[wifi] got ip: %s\n", WiFi.localIP().toString().c_str());
+                break;
             case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
-                Serial.printf("[wifi] DISCONNECTED reason=%d (SSID='%s')\n",
+                g_wifiUp = false;
+                g_bridgeUp = false;
+                Serial.printf("[wifi] DISCONNECTED reason=%d/%s (SSID='%s')\n",
                               info.wifi_sta_disconnected.reason,
+                              WiFi.disconnectReasonName((wifi_err_reason_t)info.wifi_sta_disconnected.reason),
                               info.wifi_sta_disconnected.ssid);
                 break;
             }
             default: break;
         }
     });
+
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+
     Serial.printf("[wifi] scanning for SSID '%s'...\n", WIFI_SSID);
     int found = WiFi.scanNetworks(false, true);  // async=false, show_hidden=true
     bool saw = false;
@@ -76,11 +108,12 @@ static void connectWifi() {
     WiFi.scanDelete();
     if (!saw) Serial.println("[wifi] !!! target SSID NOT visible to ESP32 (2.4 GHz only)");
 
+    Serial.println("[wifi] connecting...");
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
     for (int i = 0; i < 40; i++) {
         if (WiFi.status() == WL_CONNECTED) { g_wifiUp = true; return; }
-        WiFi.begin(WIFI_SSID, WIFI_PASS);
         delay(500);
-        Serial.printf("[wifi] attempt %d: status=%d\n", i + 1, (int)WiFi.status());
+        Serial.printf("[wifi] wait %d: status=%d\n", i + 1, (int)WiFi.status());
     }
     g_wifiUp = false;
 }
@@ -98,6 +131,22 @@ static void extractTranscript(const char* json, char* out, size_t outSize) {
     out[outSize - 1] = '\0';
 }
 
+static void beginRecording(const char* source) {
+    Serial.printf("[btn] %s -> arming mic\n", source);
+    ui::clearToBlack();
+    ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
+    ui::drawArming();
+    audio::startRecording();
+    audio::pumpRecording();
+    Serial.println("[rec] ready");
+    g_lastRecRedraw = millis();
+    g_mode = Mode::RECORDING;
+
+    ui::clearToBlack();
+    ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
+    ui::drawRec(0);
+}
+
 // POST a recorded clip and update the FSM.
 static void transcribeAndShow(const uint8_t* wav, size_t size) {
     g_mode = Mode::TRANSCRIBING;
@@ -108,11 +157,14 @@ static void transcribeAndShow(const uint8_t* wav, size_t size) {
     char body[1024];
     size_t bodyLen = 0;
     int code = net::postTranscribe(wav, size, body, sizeof(body), &bodyLen);
+    Serial.printf("[transcribe] wav=%u code=%d bodyLen=%u\n",
+                  (unsigned)size, code, (unsigned)bodyLen);
 
     if (code == 200) {
         char text[512];
         extractTranscript(body, text, sizeof(text));
         if (text[0]) {
+            Serial.printf("[transcribe] text=%s\n", text);
             strncpy(g_lastTranscript, text, sizeof(g_lastTranscript) - 1);
             g_lastTranscript[sizeof(g_lastTranscript) - 1] = '\0';
             g_mode = Mode::SHOWING;
@@ -186,6 +238,7 @@ void setup() {
 // --- loop ------------------------------------------------------------------
 void loop() {
     M5.update();
+    handleSerialCommands();
 
     // --- WiFi watchdog ------------------------------------------------------
     if (!g_wifiUp || WiFi.status() != WL_CONNECTED) {
@@ -226,12 +279,9 @@ void loop() {
             }
         }
 
-        // Hold A to start recording
-        if (g_wifiUp && g_bridgeUp && M5.BtnA.pressedFor(RECORD_HOLD_MS)) {
-            Serial.println("[btn] A hold -> recording");
-            audio::startRecording();
-            g_mode = Mode::RECORDING;
-            chirpOk();
+        // Push-to-talk: press A to start recording, release to send.
+        if (g_wifiUp && g_bridgeUp && M5.BtnA.wasPressed()) {
+            beginRecording("A press");
         }
 
         // KEYB short -> stats view
@@ -289,12 +339,13 @@ void loop() {
             Serial.println("[btn] A click -> reset!");
             ui::clearToBlack();
             ui::drawStats(g_state, WiFi.RSSI(), PROXY_URL);
-            M5.Display.setTextSize(2);
-            M5.Display.setTextColor(0x07E0, 0x0000);
+            ui::target().setTextSize(2);
+            ui::target().setTextColor(0x07E0, 0x0000);
             const char* t = "resetting...";
-            int w = M5.Display.textWidth(t);
-            M5.Display.setCursor(SCREEN_CX - w / 2, SCREEN_CY);
-            M5.Display.print(t);
+            int w = ui::target().textWidth(t);
+            ui::target().setCursor(SCREEN_CX - w / 2, SCREEN_CY);
+            ui::target().print(t);
+            ui::flush();
 
             PetState fresh;
             int code = net::postReset(fresh);
@@ -407,14 +458,6 @@ void loop() {
             g_mode = Mode::IDLE;
             // Force a fresh poll on the next iteration
             g_lastPoll = 0;
-        }
-        // Also allow a fresh long-press of A to start a new recording
-        if (M5.BtnA.pressedFor(RECORD_HOLD_MS)) {
-            s_drawn = false;
-            ui::pageReset();
-            audio::startRecording();
-            g_mode = Mode::RECORDING;
-            chirpOk();
         }
         break;
     }

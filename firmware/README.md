@@ -1,8 +1,9 @@
 # Firmware
 
 ESP32-S3 firmware for the **M5Stack StopWatch Dev Kit (C152)**. Renders a
-round-AMOLED virtual pet fed by your Claude Code / Codex CLI token usage,
-served by the bridge in `../bridge/`.
+round-AMOLED virtual pet fed by your Claude Code / Codex CLI token usage.
+It can talk to either the local bridge (`../bridge`) or the Cloudflare worker
+(`../cloudflare`).
 
 ## Quick start
 
@@ -23,13 +24,17 @@ cp src/secrets.h.example src/secrets.h
 
 ### 3. Set `PROXY_URL`
 
-Edit `src/config.h` to point at your Mac's LAN IP + bridge port:
+Edit `src/config.h` to point at your backend URL:
 
 ```sh
 # get your Mac's LAN IP
 ipconfig getifaddr en0
 # 192.168.1.42   <- put this in config.h, e.g.:
 # #define PROXY_URL "http://192.168.1.42:8787"
+
+# Cloudflare worker URL:
+# https://tokengochi-staging.YOUR_ACCOUNT.workers.dev
+# #define PROXY_URL "https://tokengochi-staging.YOUR_ACCOUNT.workers.dev"
 ```
 
 ### 4. Flash
@@ -46,6 +51,19 @@ pio device monitor        # optional, 115200 baud
 First build downloads the ESP32 toolchain + M5Unified + ArduinoJson
 (~5 min on a fresh machine). Subsequent builds are seconds.
 
+### 5. Capture the device screen
+
+The firmware supports the `TGSHOT` serial command through
+`../tools/capture-device-screen.mjs`. It captures the current 466×466 display
+mirror over USB serial and writes a PNG:
+
+```sh
+cd ..
+node tools/capture-device-screen.mjs
+```
+
+Captures are written under `screenshots/`, which is gitignored.
+
 ## Layout
 
 ```
@@ -59,7 +77,7 @@ firmware/
     ├── secrets.h.example  template
     ├── pet_state.h        PetState struct
     ├── net.h / net.cpp    HTTPClient wrapper, fetchPetState
-    └── ui.h / ui.cpp      round-AMOLED drawing helpers
+    └── ui.h / ui.cpp      round-AMOLED drawing helpers + TGSHOT mirror
 ```
 
 ## What this does (step 5 + 7 + 8 + 9)

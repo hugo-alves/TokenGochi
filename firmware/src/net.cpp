@@ -4,6 +4,7 @@
 
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 
 namespace net {
@@ -12,12 +13,27 @@ static int g_lastStatus = 0;
 
 int lastStatus() { return g_lastStatus; }
 
+static bool useHttps() {
+    return String(PROXY_URL).startsWith("https://");
+}
+
+static void beginRequest(HTTPClient& http, const String& url) {
+    if (useHttps()) {
+        static WiFiClientSecure secureClient;
+        // TODO: production hardening should replace this with a proper trust chain.
+        secureClient.setInsecure();
+        http.begin(secureClient, url);
+        return;
+    }
+    http.begin(url);
+}
+
 static bool getWithAuth(const char* path, String& body) {
     g_lastStatus = 0;
     if (WiFi.status() != WL_CONNECTED) return false;
 
     HTTPClient http;
-    http.begin(String(PROXY_URL) + path);
+    beginRequest(http, String(PROXY_URL) + path);
     http.setTimeout(HTTP_TIMEOUT_MS);
     http.addHeader("Authorization", "Bearer " DEVICE_TOKEN);
     int code = http.GET();
@@ -44,25 +60,18 @@ int postTranscribe(const uint8_t* wav, size_t wavSize,
     if (WiFi.status() != WL_CONNECTED) return 0;
 
     HTTPClient http;
-    http.begin(String(PROXY_URL) + "/transcribe");
-    http.setTimeout(HTTP_TIMEOUT_MS);
+    beginRequest(http, String(PROXY_URL) + "/transcribe");
+    http.setTimeout(TRANSCRIBE_TIMEOUT_MS);
     http.addHeader("Authorization", "Bearer " DEVICE_TOKEN);
     http.addHeader("Content-Type",  "audio/wav");
     int code = http.POST((uint8_t*)wav, wavSize);
     g_lastStatus = code;
 
     if (code == 200 && outBuf && outBufSize) {
-        // Stream the response body, capped to outBufSize-1 (NUL room).
-        size_t pos = 0;
-        WiFiClient* stream = http.getStreamPtr();
-        while (http.connected() && pos + 1 < outBufSize) {
-            size_t n = stream->available();
-            if (n == 0) { delay(5); continue; }
-            if (n > outBufSize - 1 - pos) n = outBufSize - 1 - pos;
-            int r = stream->readBytes(outBuf + pos, n);
-            if (r <= 0) break;
-            pos += r;
-        }
+        String response = http.getString();
+        size_t pos = response.length();
+        if (pos > outBufSize - 1) pos = outBufSize - 1;
+        memcpy(outBuf, response.c_str(), pos);
         outBuf[pos] = '\0';
         if (outTextLen) *outTextLen = pos;
     }
@@ -74,7 +83,7 @@ int postTranscribe(const uint8_t* wav, size_t wavSize,
 static bool getJson(const char* path, JsonDocument& doc) {
     if (WiFi.status() != WL_CONNECTED) return false;
     HTTPClient http;
-    http.begin(String(PROXY_URL) + path);
+    beginRequest(http, String(PROXY_URL) + path);
     http.setTimeout(HTTP_TIMEOUT_MS);
     http.addHeader("Authorization", "Bearer " DEVICE_TOKEN);
     int code = http.GET();
@@ -89,7 +98,7 @@ int postReset(PetState& out) {
     petStateReset(out);
     if (WiFi.status() != WL_CONNECTED) return 0;
     HTTPClient http;
-    http.begin(String(PROXY_URL) + "/pet/reset");
+    beginRequest(http, String(PROXY_URL) + "/pet/reset");
     http.setTimeout(HTTP_TIMEOUT_MS);
     http.addHeader("Authorization", "Bearer " DEVICE_TOKEN);
     int code = http.POST((uint8_t*)"", 0);

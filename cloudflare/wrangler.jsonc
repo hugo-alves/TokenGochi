@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json.schemastore.org/wrangler",
+  "name": "tokengochi-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  "env": {
+    "staging": {
+      "name": "tokengochi-staging",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "tokengochi-staging",
+          "database_id": "c01ad75f-6678-4a39-838d-172fdc35811c"
+        }
+      ],
+      "vars": {
+        "GROQ_WHISPER_MODEL": "whisper-large-v3-turbo",
+        "GROQ_URL": "https://api.groq.com/openai/v1/audio/transcriptions"
+      }
+    },
+    "production": {
+      "name": "tokengochi-production",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "tokengochi-production",
+          "database_id": "REPLACE_WITH_PRODUCTION_D1_DATABASE_ID"
+        }
+      ],
+      "vars": {
+        "GROQ_WHISPER_MODEL": "whisper-large-v3-turbo",
+        "GROQ_URL": "https://api.groq.com/openai/v1/audio/transcriptions"
+      }
+    }
+  }
+}

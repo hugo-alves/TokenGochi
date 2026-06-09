@@ -309,8 +309,11 @@ function codexHomes() {
   return raw.split(",").map((s) => s.trim()).filter(Boolean);
 }
 
-function codexCumulative(p) {
+export function codexCumulative(p) {
   if (!p || typeof p !== "object") return null;
+  if (p.total_token_usage && typeof p.total_token_usage === "object") {
+    return codexCumulative(p.total_token_usage);
+  }
   if (typeof p.total_tokens === "number") return p.total_tokens;
   const keys = [
     "input_tokens", "cached_input_tokens", "output_tokens",
@@ -540,7 +543,9 @@ async function main() {
   });
 }
 
-main();
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main();
+}
 
 // ----------------------------------------------------------------------------
 //  Accuracy note: Claude's on-disk JSONL token counts are known to run low vs

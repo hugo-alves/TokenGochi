@@ -2,8 +2,9 @@
 // Build-time configuration (NOT secrets). Edit and rebuild.
 
 #ifndef PROXY_URL
-// Mac LAN IP + bridge port. Find yours with `ipconfig getifaddr en0`.
-#define PROXY_URL "http://192.168.4.132:8787"
+// Cloudflare worker URL (HTTPS). Keep only local-only LAN URL here for local fallback.
+// For staging/prod, flash the matching firmware build that points to that worker URL.
+#define PROXY_URL "https://tokengochi-staging.pissa.workers.dev"
 #endif
 
 #ifndef POLL_INTERVAL_MS
@@ -12,6 +13,10 @@
 
 #ifndef HTTP_TIMEOUT_MS
 #define HTTP_TIMEOUT_MS 8000     // HTTPClient.setTimeout
+#endif
+
+#ifndef TRANSCRIBE_TIMEOUT_MS
+#define TRANSCRIBE_TIMEOUT_MS 30000  // Cloudflare -> Groq can take a few seconds
 #endif
 
 // Round AMOLED is 466x466 with a ~233 px visible radius. We clip drawing

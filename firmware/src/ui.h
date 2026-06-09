@@ -5,11 +5,16 @@
 
 #include "pet_state.h"
 #include "config.h"
+#include <Arduino.h>
+#include <M5Unified.h>
 
 namespace ui {
 
 void init();
+lgfx::LGFXBase& target();
+void flush();
 void clearToBlack();
+bool writeScreenshot(Stream& out);
 
 // Top status line: WiFi state + age + tokens.
 void drawStatus(const PetState& s, bool wifiUp, bool bridgeUp);
@@ -23,6 +28,9 @@ void drawOffline(const char* reason = nullptr);
 // Recording overlay — big "REC" text, elapsed seconds, and a moving bar.
 // Pass elapsedS = seconds since recording started.
 void drawRec(uint32_t elapsedS);
+
+// Shown briefly after KEYA press while the mic/codec is being armed.
+void drawArming();
 
 // "thinking" overlay while the bridge is calling Groq.
 void drawThinking();

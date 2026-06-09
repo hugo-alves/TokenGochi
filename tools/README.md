@@ -106,6 +106,43 @@ node tools/record-test-clip.mjs --url http://localhost:8788 --say "ping"
 node tools/record-test-clip.mjs --seconds 3
 ```
 
+## `capture-device-screen.mjs` — device screen PNG
+
+Captures the current M5Stack StopWatch AMOLED frame over USB serial and writes
+a PNG. This is a real firmware-side capture, not a camera photo: the firmware
+keeps a PSRAM-backed display mirror and responds to the `TGSHOT` serial command.
+
+### Usage
+
+```sh
+# auto-detect the USB serial port and write screenshots/tokengochi-<timestamp>.png
+node tools/capture-device-screen.mjs
+
+# stable path for comparisons, PR notes, or manual inspection
+node tools/capture-device-screen.mjs --out screenshots/color-check.png
+
+# use a specific serial port
+node tools/capture-device-screen.mjs --port /dev/cu.usbmodem1101
+
+# see available candidate ports
+node tools/capture-device-screen.mjs --list-ports
+```
+
+By default the tool also updates `screenshots/latest.png`. The `screenshots/`
+directory is gitignored because these PNGs are generated artifacts.
+
+### Flags
+
+| flag             | default                           | what it does                              |
+|------------------|-----------------------------------|-------------------------------------------|
+| `--port PATH`    | auto-detected USB serial          | serial port for the connected device      |
+| `--baud N`       | `115200`                          | serial baud rate                          |
+| `--out FILE`     | timestamped PNG under `screenshots/` | PNG output path                       |
+| `--latest FILE`  | `screenshots/latest.png`          | also copy the capture to this path        |
+| `--no-latest`    | —                                 | skip updating `latest.png`                |
+| `--timeout-ms N` | `90000`                           | overall serial capture timeout            |
+| `--list-ports`   | —                                 | print candidate serial ports and exit     |
+
 ## Typical dev loop
 
 ```sh
@@ -116,6 +153,7 @@ node tools/synth-pet-state.mjs --cycle 4000
 curl -H "Authorization: Bearer the-same-long-random-string-as-the-firmware" \
   http://localhost:8788/pet/state
 node tools/record-test-clip.mjs --url http://localhost:8788 --say "hi buddy"
+node tools/capture-device-screen.mjs --out screenshots/ui-check.png
 
 # terminal 3: rebuild + flash the firmware with PROXY_URL=http://localhost:8788
 cd firmware && pio run -t upload

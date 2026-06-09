@@ -8,21 +8,22 @@ sleepy when you stop, and chat back when you hold the button.
          ⌚  ← the StopWatch
    🍔  ⬆ tokens  ──▶  🌕 happy / 😟 hungry / 💤 sleepy / 🤒 sick
    ⬇ text         ⬆  466x466 round AMOLED, 4 mood-sprite frames + blink
-  🌉 bridge       ⌨  hold A to record → Whisper on Groq → text on screen
-  ~/TokenGochi    📡  HTTP, LAN-only, no cloud, no account
+  🌉 bridge/worker⌨  hold A to record → Whisper on Groq → text on screen
+  ~/TokenGochi    📡  HTTPS API, fallback LAN mode available
 ```
 
 ## Hardware
 
 - **M5Stack StopWatch Dev Kit** (C152, ESP32-S3R8, 8 MB PSRAM, 16 MB flash)
   — has 1.75" round AMOLED, 2 buttons, MEMS mic, speaker, vibration motor.
-- **A Mac** (or any Linux box) running Node 18+ on the same LAN. The bridge is
-  zero-dependency: just `node bridge/tamagotchi-bridge.mjs`.
+- **A Mac** (or any Linux box) running Node 18+. Local mode runs `bridge/tamagotchi-bridge.mjs` on LAN; cloud mode runs a Cloudflare worker and uses `bridge/token-ingest.mjs` as outbound publisher.
 - **A Groq API key** (free tier is fine) — only needed for `/transcribe`.
 
 ## First-run guide (5 minutes)
 
-### 1. Start the bridge
+### 1. Start the backend
+
+#### Option A — Local bridge (LAN fallback)
 
 ```sh
 cd bridge
@@ -39,14 +40,34 @@ echo "GROQ_API_KEY=gsk_..." >> bridge/.env
 launchctl kickstart -k gui/$(id -u)/com.tokengochi.bridge
 ```
 
-### 2. Get the bridge URL
+#### Option B — Cloudflare backend (recommended for guest/public Wi-Fi)
 
 ```sh
-ipconfig getifaddr en0
-# e.g. 192.168.1.42
+cd cloudflare
+npm install
+npm run deploy:staging       # set D1 IDs/secrets first; see cloudflare/README.md
 ```
 
-You’ll paste that into the firmware in step 4.
+Then publish tokens from the Mac:
+
+```sh
+cd bridge
+node token-ingest.mjs --once
+```
+
+### 2. Get the backend URL
+
+```sh
+cd firmware
+# for local mode, use:
+ipconfig getifaddr en0
+# e.g. 192.168.1.42 -> PROXY_URL "http://192.168.1.42:8787"
+
+# for cloud mode, use the Worker URL, for example:
+# PROXY_URL "https://tokengochi-staging.your-account.workers.dev"
+```
+
+You’ll paste the selected URL into firmware `src/config.h` in step 3.
 
 ### 3. Flash the firmware
 
@@ -54,7 +75,7 @@ You’ll paste that into the firmware in step 4.
 cd firmware
 cp src/secrets.h.example src/secrets.h
 # edit src/secrets.h with your WiFi SSID, password, and the bridge's DEVICE_TOKEN
-# edit src/config.h to set PROXY_URL to http://<bridge-ip>:8787
+# edit src/config.h to set PROXY_URL to your selected backend URL
 ```
 
 Install PlatformIO once:
@@ -93,6 +114,9 @@ pio device monitor             # optional: 115200 baud serial log
   `node tools/synth-pet-state.mjs --port 8800 --cycle 3000` runs a canned
   bridge. `node tools/record-test-clip.mjs --url http://localhost:8800 --say "hi"`
   posts a TTS clip to it and prints the (mock) transcript.
+- **Want a device-screen capture?**
+  `node tools/capture-device-screen.mjs` captures the current AMOLED frame over
+  USB serial and writes a PNG under `screenshots/`.
 
 ## API reference
 
@@ -107,28 +131,29 @@ pio device monitor             # optional: 115200 baud serial log
 ## Architecture (one page)
 
 ```
-+-------------------+      LAN      +-------------------+     HTTPS    +-------------+
-|  StopWatch        |  HTTP JSON    |  bridge.mjs       |  multipart   |  Groq API   |
-|  (ESP32-S3, C++)  | <-----------> |  Node 18+ stdlib  | <-----------> |  Whisper    |
-|                   |               |                   |               |  v3 turbo   |
-|  466x466 AMOLED   |               |  walks JSONL in:  |               +-------------+
-|  2 buttons        |               |   ~/.claude/      |
-|  mic + speaker    |               |   ~/.codex/        |
-|  vibration motor  |               |                   |
-+-------------------+               |  state.json in    |
-                                    |  bridge/ dir       |
-                                    +-------------------+
++----------------------+      HTTPS      +----------------------+     D1      +-------------+
+|  StopWatch (C152)    | ------------->  |  Cloudflare Worker   | ---------> |  Groq API   |
+|  HTTPS PROXY_URL     |                |  /pet, /transcribe   |            |  Whisper    |
++----------------------+                +----------------------+            +-------------+
+       |      ^                                                          
+       |      | optional LAN fallback                          
+       |      v                                              
++----------------------+                               
+| bridge (LAN) +        |                               
+| token-ingest (publish) |                              
++----------------------+                               
 ```
 
 - **Firmware** (`firmware/`) — PlatformIO + Arduino + M5Unified. State
   machine: `IDLE / RECORDING / TRANSCRIBING / SHOWING / STATS / CONFIRM / ERROR`.
   4-sprite mood faces in `src/sprites.h` (~200 KB RGB565 in flash, PROGMEM).
-- **Bridge** (`bridge/`) — Self-contained `tamagotchi-bridge.mjs`, runs as a
-  launchd agent, no `npm install`. Reads Claude Code + Codex CLI rollouts to
-  compute `tokens_today`, derives mood from time-of-day + tokens, proxies audio
-  to Groq, persists pet state in `state.json`.
+- **Bridge fallback** (`bridge/`) — Self-contained `tamagotchi-bridge.mjs` in LAN mode, plus
+  `token-ingest.mjs` which reads local logs and publishes only token totals to
+  Worker `/ingest/tokens`.
+- **Cloudflare backend** (`cloudflare/`) — HTTPS API running at public URL and
+  persists state in Cloudflare D1. Watch requests now avoid LAN restrictions.
 - **Tools** (`tools/`) — Dev utilities: canned bridge, Mac-mic → bridge, sprite
-  generator, PPM previewer.
+  generator, PPM previewer, and device-screen capture.
 
 ## Testing
 
@@ -185,6 +210,7 @@ TokenGochi/
     ├── README.md
     ├── synth-pet-state.mjs              canned bridge
     ├── record-test-clip.mjs             Mac-mic → bridge
+    ├── capture-device-screen.mjs        USB serial screen capture
     ├── generate-sprites.mjs            sprite generator
     └── dump-sprite.mjs                  PPM previewer
 ```

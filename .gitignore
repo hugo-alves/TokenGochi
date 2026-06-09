@@ -11,6 +11,7 @@
 bridge/.env
 bridge/state.json
 bridge/bridge.log
+bridge/ingest.log
 
 # Firmware
 firmware/.pio/
@@ -20,3 +21,9 @@ firmware/src/secrets.h
 
 # Tools
 tools/_artifacts/
+screenshots/
+
+# Cloudflare
+cloudflare/.wrangler/
+cloudflare/dist/
+cloudflare/.dev.vars
