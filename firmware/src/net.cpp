@@ -94,6 +94,86 @@ static bool getJson(const char* path, JsonDocument& doc) {
     return deserializeJson(doc, body) == DeserializationError::Ok;
 }
 
+static void copyString(char* out, size_t outSize, const char* value) {
+    if (!out || outSize == 0) return;
+    strncpy(out, value ? value : "", outSize - 1);
+    out[outSize - 1] = '\0';
+}
+
+static bool percentVariantToX10(JsonVariant value, int16_t& out, bool signedValue = false) {
+    if (!value.is<float>() && !value.is<int>()) return false;
+    float percent = value | 0.0f;
+    if (signedValue) {
+        if (percent < -100.0f) percent = -100.0f;
+        if (percent > 100.0f) percent = 100.0f;
+    } else {
+        if (percent < 0.0f) percent = 0.0f;
+        if (percent > 100.0f) percent = 100.0f;
+    }
+    out = (int16_t)(percent * 10.0f + (percent >= 0.0f ? 0.5f : -0.5f));
+    return true;
+}
+
+static const char* paceKindFromStage(const char* stage) {
+    if (!stage || !*stage) return "";
+    if (strcmp(stage, "on_track") == 0) return "on_pace";
+    if (strcmp(stage, "slightly_ahead") == 0 ||
+        strcmp(stage, "ahead") == 0 ||
+        strcmp(stage, "far_ahead") == 0) {
+        return "deficit";
+    }
+    if (strcmp(stage, "slightly_behind") == 0 ||
+        strcmp(stage, "behind") == 0 ||
+        strcmp(stage, "far_behind") == 0) {
+        return "reserve";
+    }
+    return "";
+}
+
+static void derivePaceFields(PetState& out) {
+    if (!out.codex_pace_kind[0] && out.codex_pace_delta_x10 != INT16_MIN) {
+        if (out.codex_pace_delta_x10 > 20) {
+            copyString(out.codex_pace_kind, sizeof(out.codex_pace_kind), "deficit");
+        } else if (out.codex_pace_delta_x10 < -20) {
+            copyString(out.codex_pace_kind, sizeof(out.codex_pace_kind), "reserve");
+        } else {
+            copyString(out.codex_pace_kind, sizeof(out.codex_pace_kind), "on_pace");
+        }
+    }
+
+    if (out.codex_balance_percent_x10 < 0 && out.codex_pace_delta_x10 != INT16_MIN) {
+        int16_t absDelta = out.codex_pace_delta_x10 < 0
+            ? (int16_t)(-out.codex_pace_delta_x10)
+            : out.codex_pace_delta_x10;
+        out.codex_balance_percent_x10 = absDelta;
+    }
+
+    if (!out.codex_pace_label[0] && out.codex_pace_kind[0]) {
+        if (strcmp(out.codex_pace_kind, "on_pace") == 0) {
+            copyString(out.codex_pace_label, sizeof(out.codex_pace_label), "on pace");
+        } else {
+            int pct = out.codex_balance_percent_x10 >= 0
+                ? (out.codex_balance_percent_x10 + 5) / 10
+                : 0;
+            snprintf(out.codex_pace_label,
+                     sizeof(out.codex_pace_label),
+                     "%d%% %s",
+                     pct,
+                     out.codex_pace_kind);
+        }
+    }
+}
+
+static void applyPaceMood(PetState& out) {
+    if (strcmp(out.codex_pace_kind, "reserve") == 0) {
+        copyString(out.mood, sizeof(out.mood), "very hungry");
+    } else if (strcmp(out.codex_pace_kind, "deficit") == 0) {
+        copyString(out.mood, sizeof(out.mood), "very happy");
+    } else if (strcmp(out.codex_pace_kind, "on_pace") == 0) {
+        copyString(out.mood, sizeof(out.mood), "happy");
+    }
+}
+
 static void parseUsageMetadata(JsonDocument& doc, PetState& out) {
     JsonObject usage = doc["usage"];
     if (usage.isNull()) return;
@@ -103,15 +183,25 @@ static void parseUsageMetadata(JsonDocument& doc, PetState& out) {
     const char* source = codex["source"] | "";
     if (strcmp(source, "codex_account") != 0) return;
 
-    if (codex["metric_used_percent"].is<float>() || codex["metric_used_percent"].is<int>()) {
-        float percent = codex["metric_used_percent"] | 0.0f;
-        if (percent < 0.0f) percent = 0.0f;
-        if (percent > 100.0f) percent = 100.0f;
-        out.codex_usage_percent_x10 = (int16_t)(percent * 10.0f + 0.5f);
+    percentVariantToX10(codex["metric_used_percent"], out.codex_usage_percent_x10);
+
+    JsonObject pace = codex["pace"];
+    if (!pace.isNull()) {
+        percentVariantToX10(pace["actual_used_percent"], out.codex_usage_percent_x10);
+        percentVariantToX10(pace["expected_used_percent"], out.codex_expected_percent_x10);
+        percentVariantToX10(pace["delta_percent"], out.codex_pace_delta_x10, true);
+        percentVariantToX10(pace["balance_percent"], out.codex_balance_percent_x10);
+
+        const char* kind = pace["balance_kind"] | "";
+        if (!kind[0]) kind = paceKindFromStage(pace["stage"] | "");
+        copyString(out.codex_pace_kind, sizeof(out.codex_pace_kind), kind);
+        copyString(out.codex_pace_label, sizeof(out.codex_pace_label), pace["balance_label"] | "");
+        derivePaceFields(out);
+        applyPaceMood(out);
     }
 
     const char* plan = codex["plan_type"] | "";
-    strncpy(out.codex_plan, plan, sizeof(out.codex_plan) - 1);
+    copyString(out.codex_plan, sizeof(out.codex_plan), plan);
 }
 
 int postReset(PetState& out) {
@@ -129,7 +219,7 @@ int postReset(PetState& out) {
 
     JsonDocument doc;
     if (deserializeJson(doc, body) != DeserializationError::Ok) return 0;
-    strncpy(out.mood, doc["mood"] | "happy", sizeof(out.mood) - 1);
+    copyString(out.mood, sizeof(out.mood), doc["mood"] | "happy");
     out.age_s             = doc["age_s"]             | 0;
     out.food_today        = doc["food_today"]        | 0;
     out.last_msg_ts       = doc["last_msg_ts"]       | 0;
@@ -137,7 +227,7 @@ int postReset(PetState& out) {
     out.audio_runs_today  = doc["audio_runs_today"]  | 0;
     out.ts                = doc["ts"]                | 0;
     const char* msg = doc["last_msg"] | "";
-    strncpy(out.last_msg, msg, sizeof(out.last_msg) - 1);
+    copyString(out.last_msg, sizeof(out.last_msg), msg);
     JsonObject bd = doc["breakdown"];
     if (!bd.isNull()) {
         out.breakdown_claude = bd["claude"] | 0;
@@ -161,7 +251,7 @@ bool fetchPetState(PetState& out) {
     }
 
     const char* mood = doc["mood"] | "unknown";
-    strncpy(out.mood, mood, sizeof(out.mood) - 1);
+    copyString(out.mood, sizeof(out.mood), mood);
     out.age_s              = doc["age_s"]              | 0;
     out.food_today         = doc["food_today"]         | 0;
     out.last_msg_ts        = doc["last_msg_ts"]        | 0;
@@ -170,7 +260,7 @@ bool fetchPetState(PetState& out) {
     out.ts                 = doc["ts"]                 | 0;
 
     const char* msg = doc["last_msg"] | "";
-    strncpy(out.last_msg, msg, sizeof(out.last_msg) - 1);
+    copyString(out.last_msg, sizeof(out.last_msg), msg);
 
     JsonObject bd = doc["breakdown"];
     if (!bd.isNull()) {

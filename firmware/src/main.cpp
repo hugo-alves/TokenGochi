@@ -32,6 +32,7 @@ static char         g_transcriptFooter[40];
 static char         g_lastError[64];
 static uint32_t     g_errorAtMs = 0;
 static uint32_t     g_statsAtMs = 0;       // when stats view opened
+static uint32_t     g_confirmAtMs = 0;     // when reset confirm opened
 static uint32_t     g_settingsAtMs = 0;
 static uint32_t     g_settingsSavedUntilMs = 0;
 static uint32_t     g_greetingUntilMs = 0; // hide greeting after this
@@ -87,14 +88,23 @@ static void logBodyPreview(const char* tag, const char* body, size_t bodyLen) {
 }
 
 static void drawBootScreen(const char* line2, uint16_t color) {
+    ui::clearToBlack();
+    ui::target().setTextSize(3);
+    ui::target().setTextColor(0x87F0, 0x0000);
+    int w = ui::target().textWidth("TokenGochi");
+    ui::target().setCursor(SCREEN_CX - w / 2, 108);
+    ui::target().print("TokenGochi");
+
+    ui::target().setTextSize(1);
+    ui::target().setTextColor(0x7BEF, 0x0000);
+    w = ui::target().textWidth("connecting");
+    ui::target().setCursor(SCREEN_CX - w / 2, 160);
+    ui::target().print("connecting");
+
     ui::target().setTextSize(2);
-    ui::target().setTextColor(0xFFFF, 0x0000);
-    ui::target().setCursor(20, 20);
-    ui::target().print("token tamagotchi");
-    ui::target().setCursor(20, 50);
-    ui::target().printf("ssid: %s", WIFI_SSID);
-    ui::target().setCursor(20, 80);
     ui::target().setTextColor(color, 0x0000);
+    w = ui::target().textWidth(line2);
+    ui::target().setCursor(SCREEN_CX - w / 2, 198);
     ui::target().print(line2);
     ui::flush();
 }
@@ -286,16 +296,27 @@ static bool touchClicked(int16_t* x, int16_t* y) {
     return false;
 }
 
+static bool pointInCircle(int16_t x, int16_t y, int cx, int cy, int r) {
+    const int32_t dx = (int32_t)x - cx;
+    const int32_t dy = (int32_t)y - cy;
+    return dx * dx + dy * dy <= (int32_t)r * r;
+}
+
+static bool pointInHomeRing(int16_t x, int16_t y) {
+    const int32_t dx = (int32_t)x - SCREEN_CX;
+    const int32_t dy = (int32_t)y - SCREEN_CY;
+    const int32_t d2 = dx * dx + dy * dy;
+    return d2 >= (int32_t)178 * 178 && d2 <= (int32_t)233 * 233;
+}
+
 static uint32_t durationFromTouch(int16_t x, int16_t y) {
-    static constexpr int BOX_W = 220;
-    static constexpr int BOX_H = 54;
-    static constexpr int BOX_X = SCREEN_CX - BOX_W / 2;
-    static constexpr int BOX_Y[] = {142, 214, 286};
+    static constexpr int CIRCLE_R = 49;
+    static constexpr int OPTION_X[] = {142, 233, 324};
+    static constexpr int OPTION_Y[] = {248, 184, 248};
     static constexpr uint32_t OPTIONS[] = {10, 20, 30};
 
-    if (x < BOX_X || x > BOX_X + BOX_W) return 0;
     for (size_t i = 0; i < sizeof(OPTIONS) / sizeof(OPTIONS[0]); ++i) {
-        if (y >= BOX_Y[i] && y <= BOX_Y[i] + BOX_H) {
+        if (pointInCircle(x, y, OPTION_X[i], OPTION_Y[i], CIRCLE_R)) {
             return OPTIONS[i];
         }
     }
@@ -463,12 +484,12 @@ static void beginRecording(const char* source) {
     Serial.printf("[rec] ready cap_s=%lu max_wav_bytes=%u\n",
                   (unsigned long)audio::maxDurationSeconds(),
                   (unsigned)audio::MAX_WAV_BYTES);
-    g_lastRecRedraw = millis();
     g_mode = Mode::RECORDING;
 
     ui::clearToBlack();
     ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
-    ui::drawRec(0);
+    ui::drawRec(0, g_recordSeconds);
+    g_lastRecRedraw = 0;
 }
 
 static void drawPetHome() {
@@ -710,10 +731,22 @@ void loop() {
             break;
         }
 
+        int16_t touchX = 0;
+        int16_t touchY = 0;
+        if (g_bridgeUp && touchClicked(&touchX, &touchY) && pointInHomeRing(touchX, touchY)) {
+            Serial.println("[touch] home ring -> stats");
+            g_mode = Mode::STATS;
+            g_statsAtMs = millis();
+            ui::clearToBlack();
+            ui::drawStats(g_state, WiFi.RSSI(), PROXY_URL);
+            break;
+        }
+
         // Animate the blink on the pet
         if (g_bridgeUp && pet_sprite::tickBlink()) {
             pet_sprite::drawCentered(pet_sprite::moodIndex(g_state.mood),
-                                     pet_sprite::currentFrame());
+                                     pet_sprite::currentFrame(),
+                                     2);
         }
 
         // Hide the greeting overlay once the timer expires
@@ -732,6 +765,14 @@ void loop() {
             break;
         }
 
+        int16_t touchX = 0;
+        int16_t touchY = 0;
+        if (g_wifiUp && touchClicked(&touchX, &touchY) &&
+            pointInCircle(touchX, touchY, SCREEN_CX, SCREEN_CY + 18, 92)) {
+            beginRecording("touch mic from voice");
+            break;
+        }
+
         if (g_wifiUp && btnBClicked()) {
             beginRecording("B click from voice");
             break;
@@ -744,27 +785,76 @@ void loop() {
         if (btnBClicked()) {
             Serial.println("[btn] B click -> confirm");
             g_mode = Mode::CONFIRM;
+            g_confirmAtMs = millis();
             ui::clearToBlack();
             ui::drawStats(g_state, WiFi.RSSI(), PROXY_URL);
             ui::drawConfirmReset();
             break;
         }
+        int16_t touchX = 0;
+        int16_t touchY = 0;
+        if (touchClicked(&touchX, &touchY)) {
+            returnToPet("touch from stats");
+            break;
+        }
         // A press -> back to home
         if (btnAClicked()) {
-            Serial.println("[btn] A click -> home");
-            g_mode = Mode::IDLE;
-            g_lastPoll = 0;
+            returnToPet("A click from stats");
             break;
         }
         // Auto-dismiss
         if (millis() - g_statsAtMs > STATS_TIMEOUT_MS) {
-            g_mode = Mode::IDLE;
-            g_lastPoll = 0;
+            returnToPet("stats timeout");
         }
         break;
     }
 
     case Mode::CONFIRM: {
+        int16_t touchX = 0;
+        int16_t touchY = 0;
+        if (touchClicked(&touchX, &touchY)) {
+            if (pointInCircle(touchX, touchY, SCREEN_CX - 70, SCREEN_CY + 38, 48)) {
+                Serial.println("[touch] confirm yes -> reset");
+                ui::clearToBlack();
+                ui::drawStats(g_state, WiFi.RSSI(), PROXY_URL);
+                ui::target().setTextSize(2);
+                ui::target().setTextColor(0x07E0, 0x0000);
+                const char* t = "resetting...";
+                int w = ui::target().textWidth(t);
+                ui::target().setCursor(SCREEN_CX - w / 2, SCREEN_CY);
+                ui::target().print(t);
+                ui::flush();
+
+                PetState fresh;
+                int code = net::postReset(fresh);
+                if (code == 200) {
+                    g_state = fresh;
+                    syncClock(g_state.ts);
+                    g_mode = Mode::IDLE;
+                    g_lastPoll = 0;
+                    chirpOk();
+                    M5.Power.setVibration(140);
+                    delay(120);
+                    M5.Power.setVibration(0);
+                    drawPetHome();
+                } else {
+                    snprintf(g_lastError, sizeof(g_lastError), "HTTP %d", code);
+                    g_mode = Mode::ERROR;
+                    g_errorAtMs = millis();
+                    chirpFail();
+                }
+                break;
+            }
+            if (pointInCircle(touchX, touchY, SCREEN_CX + 70, SCREEN_CY + 38, 48)) {
+                Serial.println("[touch] confirm no -> stats");
+                g_mode = Mode::STATS;
+                g_statsAtMs = millis();
+                ui::clearToBlack();
+                ui::drawStats(g_state, WiFi.RSSI(), PROXY_URL);
+                break;
+            }
+        }
+
         if (btnAClicked()) {
             Serial.println("[btn] A click -> reset!");
             ui::clearToBlack();
@@ -788,6 +878,7 @@ void loop() {
                 M5.Power.setVibration(140);
                 delay(120);
                 M5.Power.setVibration(0);
+                drawPetHome();
             } else {
                 snprintf(g_lastError, sizeof(g_lastError), "HTTP %d", code);
                 g_mode = Mode::ERROR;
@@ -803,7 +894,7 @@ void loop() {
             ui::drawStats(g_state, WiFi.RSSI(), PROXY_URL);
             break;
         }
-        if (millis() - g_statsAtMs > CONFIRM_TIMEOUT_MS) {
+        if (millis() - g_confirmAtMs > CONFIRM_TIMEOUT_MS) {
             g_mode = Mode::STATS;
             g_statsAtMs = millis();
         }
@@ -847,7 +938,12 @@ void loop() {
     }
 
     case Mode::SETTINGS_SAVED: {
-        if (millis() >= g_settingsSavedUntilMs || btnAClicked() || btnBClicked()) {
+        int16_t touchX = 0;
+        int16_t touchY = 0;
+        if (millis() >= g_settingsSavedUntilMs ||
+            btnAClicked() ||
+            btnBClicked() ||
+            touchClicked(&touchX, &touchY)) {
             returnToPet("settings saved");
         }
         break;
@@ -856,14 +952,12 @@ void loop() {
     case Mode::RECORDING: {
         audio::pumpRecording();
 
-        // Redraw the REC overlay ~5x/sec
-        if (millis() - g_lastRecRedraw > 200) {
-            g_lastRecRedraw = millis();
-            ui::clearToBlack();
-            ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
-            ui::drawRec(audio::elapsedSeconds());
-            // Also show the face so it doesn't disappear
-            pet_sprite::drawCentered(pet_sprite::moodIndex(g_state.mood), 0);
+        // Redraw only when the visible countdown changes. Avoid pushing
+        // black/status-only frames while the mic is running.
+        const uint32_t elapsedS = audio::elapsedSeconds();
+        if (elapsedS != g_lastRecRedraw) {
+            g_lastRecRedraw = elapsedS;
+            ui::drawRec(elapsedS, g_recordSeconds);
         }
 
         // A returns to TokenGochi without uploading an unintended clip.
@@ -875,6 +969,14 @@ void loop() {
         // B completes the voice capture and sends it for transcription.
         if (btnBClicked()) {
             finishRecording("B click while recording", false);
+            break;
+        }
+
+        int16_t touchX = 0;
+        int16_t touchY = 0;
+        if (touchClicked(&touchX, &touchY) &&
+            pointInCircle(touchX, touchY, SCREEN_CX, SCREEN_CY + 10, 92)) {
+            finishRecording("touch mic while recording", false);
             break;
         }
 
@@ -982,7 +1084,9 @@ void loop() {
             g_lastPoll = 0;
         }
         // Any button press to dismiss early
-        if (btnAClicked() || btnBClicked()) {
+        int16_t touchX = 0;
+        int16_t touchY = 0;
+        if (btnAClicked() || btnBClicked() || touchClicked(&touchX, &touchY)) {
             s_drawn = false;
             g_mode = Mode::IDLE;
             g_lastPoll = 0;

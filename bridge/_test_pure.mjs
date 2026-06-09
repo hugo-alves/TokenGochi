@@ -9,6 +9,7 @@ import {
   accountUsagePace,
   codexCumulative,
   computeMood as bridgeComputeMood,
+  paceBalance,
   paceStage,
 } from "./tamagotchi-bridge.mjs";
 
@@ -119,10 +120,13 @@ assert.equal(accountUsage.source, "codex_account");
 assert.equal(accountUsage.plan_type, "pro");
 assert.equal(accountUsage.primary_used_percent, 26);
 assert.equal(accountUsage.secondary_used_percent, 28);
-assert.equal(accountUsage.metric_used_percent, 27);
+assert.equal(accountUsage.metric_used_percent, 28);
+assert.equal(accountUsage.metric_window, "weekly");
 assert.equal(accountUsage.additional_rate_limits[0].secondary_used_percent, 2);
 assert.equal(accountUsage.pace.stage, "far_behind");
-console.log("codex account usage mapping: 7/7 ok");
+assert.equal(accountUsage.pace.balance_kind, "reserve");
+assert.equal(accountUsage.pace.balance_label, "22% reserve");
+console.log("codex account usage mapping: 10/10 ok");
 
 // --- Codex pace -------------------------------------------------------------
 assert.equal(paceStage(0), "on_track");
@@ -132,6 +136,9 @@ assert.equal(paceStage(13), "far_ahead");
 assert.equal(paceStage(-4), "slightly_behind");
 assert.equal(paceStage(-8), "behind");
 assert.equal(paceStage(-13), "far_behind");
+assert.deepEqual(paceBalance(0), { kind: "on_pace", percent: 0, label: "on pace" });
+assert.deepEqual(paceBalance(8), { kind: "deficit", percent: 8, label: "8% deficit" });
+assert.deepEqual(paceBalance(-6.4), { kind: "reserve", percent: 6.4, label: "6% reserve" });
 
 const pace = accountUsagePace(
   { used_percent: 60, reset_at: 2000, limit_window_seconds: 1000 },
@@ -140,14 +147,16 @@ const pace = accountUsagePace(
 assert.equal(pace.expected_used_percent, 50);
 assert.equal(pace.delta_percent, 10);
 assert.equal(pace.stage, "ahead");
-assert.equal(bridgeComputeMood(0, new Date("2026-06-08T12:00:00"), { codex: { pace } }), "excited");
+assert.equal(pace.balance_kind, "deficit");
+assert.equal(pace.balance_label, "10% deficit");
+assert.equal(bridgeComputeMood(0, new Date("2026-06-08T12:00:00"), { codex: { pace } }), "very happy");
 assert.equal(
   bridgeComputeMood(0, new Date("2026-06-08T12:00:00"), { codex: { pace: { stage: "slightly_behind" } } }),
-  "peckish"
+  "very hungry"
 );
 assert.equal(
   bridgeComputeMood(0, new Date("2026-06-08T12:00:00"), { codex: { pace: { stage: "behind" } } }),
-  "hungry"
+  "very hungry"
 );
 assert.equal(
   bridgeComputeMood(0, new Date("2026-06-08T12:00:00"), { codex: { pace: { stage: "far_behind" } } }),
@@ -157,6 +166,6 @@ assert.equal(
   bridgeComputeMood(0, new Date("2026-06-08T12:00:00"), { codex: { pace: { stage: "far_ahead" } } }),
   "very happy"
 );
-console.log("codex pace: 16/16 ok");
+console.log("codex pace: 23/23 ok");
 
 console.log("\nAll logic tests passed.");

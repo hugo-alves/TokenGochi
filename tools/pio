@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+set -eu
+
+exec /Users/hugoalves/.local/bin/uvx --python 3.12 --with intelhex platformio "$@"

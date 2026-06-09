@@ -477,13 +477,14 @@
           <h1>What should I click?</h1>
           <p class="lead">
             Use this when the watch is on your wrist and you need the button pattern fast.
-            KEYA is the yellow button. KEYB is the blue button. Touch is only a direct selector
-            on the recording-duration settings screen.
+            KEYA is the yellow button. KEYB is the blue button. Touch mirrors visible
+            targets such as the home ring, mic, reset choices, duration buttons, and transcript pages.
           </p>
           <div class="status-strip" aria-label="Core button meanings">
-            <span class="pill">A = back, cancel, page, yes on reset</span>
+            <span class="pill">A = history, back, cancel, page, yes on reset</span>
             <span class="pill">B = enter, start, send, dismiss, no on reset</span>
-            <span class="pill">A + B hold = recording length</span>
+            <span class="pill">touch = visible target or page</span>
+            <span class="pill">A+B hold = recording length</span>
           </div>
         </div>
 
@@ -513,7 +514,15 @@
             <div class="label">From pet screen</div>
             <h2>Check stats</h2>
             <span class="click b">B hold</span>
-            <p>Shows mood, usage, chats, WiFi RSSI, and current API host.</p>
+            <span class="click touch">tap ring</span>
+            <p>Shows mood, usage, chats, WiFi RSSI, and current API host. Tap or A returns home.</p>
+          </article>
+
+          <article class="card">
+            <div class="label">From pet screen</div>
+            <h2>Read history</h2>
+            <span class="click a">A short</span>
+            <p>Opens saved device-only transcripts. B moves older, A or tap opens the selected entry.</p>
           </article>
 
           <article class="card">
@@ -536,11 +545,13 @@
           <article class="step">
             <h3>Voice ready</h3>
             <span class="click b">B short</span>
+            <span class="click touch">tap mic</span>
             <small>Start recording. Use A here if you changed your mind.</small>
           </article>
           <article class="step">
             <h3>Recording</h3>
             <span class="click b">B send</span>
+            <span class="click touch">tap mic</span>
             <span class="click a">A cancel</span>
             <small>Auto-stops at the selected duration.</small>
           </article>
@@ -565,19 +576,19 @@
           <article class="card">
             <div class="label">Pet home</div>
             <h2>Default screen</h2>
-            <p><span class="click b">B short</span> voice. <span class="click b">B hold</span> stats. <span class="click a">A</span> has no primary action here.</p>
+            <p><span class="click a">A short</span> history. <span class="click b">B short</span> voice. <span class="click b">B hold</span> or <span class="click touch">tap ring</span> stats.</p>
           </article>
 
           <article class="card">
             <div class="label">Voice ready</div>
             <h2>Armed but not recording</h2>
-            <p><span class="click b">B short</span> records. <span class="click a">A short</span> returns to the pet.</p>
+            <p><span class="click b">B short</span> or <span class="click touch">tap mic</span> records. <span class="click a">A short</span> returns to the pet.</p>
           </article>
 
           <article class="card">
             <div class="label">Recording</div>
             <h2>Mic is active</h2>
-            <p><span class="click b">B short</span> sends the clip. <span class="click a">A press</span> cancels and does not upload.</p>
+            <p><span class="click b">B short</span> or <span class="click touch">tap mic</span> sends the clip. <span class="click a">A press</span> cancels and does not upload.</p>
           </article>
 
           <article class="card">
@@ -587,15 +598,21 @@
           </article>
 
           <article class="card">
+            <div class="label">History</div>
+            <h2>Saved transcripts</h2>
+            <p><span class="click b">B short</span> moves older. <span class="click a">A short</span> or <span class="click touch">tap</span> opens. In an entry, A/tap pages and B returns to the list.</p>
+          </article>
+
+          <article class="card">
             <div class="label">Stats</div>
             <h2>Usage and connection</h2>
-            <p><span class="click b">B short</span> opens reset confirm. <span class="click a">A short</span> returns home.</p>
+            <p><span class="click b">B short</span> opens reset confirm. <span class="click a">A short</span> or <span class="click touch">tap</span> returns home.</p>
           </article>
 
           <article class="card">
             <div class="label">Reset confirm</div>
             <h2>Be deliberate</h2>
-            <p><span class="click a">A short</span> confirms reset. <span class="click b">B short</span> cancels back to stats.</p>
+            <p><span class="click a">A short</span> or <span class="click touch">tap yes</span> confirms reset. <span class="click b">B short</span> or <span class="click touch">tap no</span> cancels back to stats.</p>
           </article>
 
           <article class="card">
@@ -607,7 +624,7 @@
           <article class="card">
             <div class="label">Error</div>
             <h2>Something failed</h2>
-            <p><span class="click a">A short</span> or <span class="click b">B short</span> dismisses early. It also auto-dismisses after a short timeout.</p>
+            <p><span class="click a">A short</span>, <span class="click b">B short</span>, or <span class="click touch">tap</span> dismisses early. It also auto-dismisses after a short timeout.</p>
           </article>
         </div>
       </section>
@@ -629,8 +646,8 @@
 
           <article class="card">
             <div class="label">Touch pattern</div>
-            <h2>Only direct choices</h2>
-            <p>Touch is used for settings options. It is not the primary control for pet, voice, recording, or transcript.</p>
+            <h2>Visible targets</h2>
+            <p>Touch opens stats from the home ring, starts or sends from the mic, selects reset choices and duration options, pages transcripts, and dismisses stats/errors.</p>
           </article>
         </div>
       </section>
@@ -647,11 +664,11 @@
             <h2>The corners do not matter</h2>
             <p>
               The watch screen is round, so usable choices stay centered inside the visible disc.
-              In settings, tap the option rows in the middle of the screen. Do not aim for corners;
+              In settings, tap the option circles in the middle of the screen. Do not aim for corners;
               they are outside the practical touch target model.
             </p>
             <div class="status-strip">
-              <span class="pill">Centered rows</span>
+              <span class="pill">Centered targets</span>
               <span class="pill">Large tap targets</span>
               <span class="pill">Saved screen confirms the tap</span>
             </div>
@@ -670,8 +687,8 @@
 
           <article class="card">
             <div class="label">During recording</div>
-            <h2>Buttons are the controls</h2>
-            <p>B sends. A cancels. Touch is ignored so a palm or sleeve does not change settings or trigger a hidden action.</p>
+            <h2>Mic target sends</h2>
+            <p>B sends. Tapping the visible mic sends. A cancels and does not upload.</p>
           </article>
 
           <article class="card">

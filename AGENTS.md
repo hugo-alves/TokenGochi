@@ -16,6 +16,9 @@ the user explicitly asks for that scope.
   `{"ok":true,"version":"0.2.0","groq_configured":false,"whisper_model":null}`.
 - `rtk` is available at `/opt/homebrew/bin/rtk` and may be used for supported
   shell commands when it keeps output readable.
+- Use `./tools/pio` for PlatformIO commands. It runs PlatformIO through `uv`
+  with Python 3.12, avoiding host `pio` wrappers pinned to unsupported Python
+  versions.
 
 Status from `STATUS.md` is useful project context but should be re-verified
 before making claims about the live device. As of that document, bridge,
@@ -129,9 +132,9 @@ Firmware:
 
 ```sh
 cd firmware
-pio run
-pio run -t upload
-pio device monitor
+../tools/pio run
+../tools/pio run -t upload
+../tools/pio device monitor
 ```
 
 Cloudflare:
@@ -193,6 +196,14 @@ For bug fixes:
 For UI/device work, prefer real device evidence: serial monitor logs and
 `tools/capture-device-screen.mjs` screenshots. If the device is unavailable,
 say `not verified` for device behavior.
+
+For firmware UI, touchscreen, display layout, sprite, or other watch-visible
+changes, do not stop at a successful build when the physical StopWatch is
+available. Flash the device, let it boot to the affected screen, then capture
+and inspect at least one round-masked screenshot with
+`tools/capture-device-screen.mjs`. Report the flash command, screenshot path,
+and whether the live device result is `verified`. If flashing or capture is
+blocked, report the blocker and mark live device verification as `not verified`.
 
 ## Git Discipline
 

@@ -45,26 +45,25 @@ Codex account usage endpoint. This is subscription-wide rate-limit usage, the
 same class of data CodexBar shows, not per-machine session logs.
 
 The account endpoint reports percentages rather than raw tokens. To preserve
-the existing backend contract, TokenGochi maps `metric_used_percent * 1000` to
-`breakdown.codex` and `food_today`, and also includes
-`usage.codex.metric_used_percent` so firmware/UI can display the real percent.
+the existing backend contract, TokenGochi maps the weekly
+`metric_used_percent * 1000` to `breakdown.codex` and `food_today`, and also
+includes `usage.codex.metric_used_percent` so firmware/UI can display the real
+weekly percent.
 
 The bridge also computes a CodexBar-style pace signal on the weekly window:
 `usage.codex.pace.expected_used_percent`, `actual_used_percent`,
-`delta_percent`, `stage`, `eta_seconds`, and `will_last_to_reset`. Until
-TokenGochi has enough historical samples to build CodexBar's historical weekly
-curve, this uses CodexBar's linear fallback: expected usage equals elapsed
-window percentage. Behind/reserve stages make the pet hungry; ahead/deficit
-stages make it happier. The current ladder is:
+`delta_percent`, `balance_kind`, `balance_label`, `stage`, `eta_seconds`, and
+`will_last_to_reset`. Until TokenGochi has enough historical samples to build
+CodexBar's historical weekly curve, this uses CodexBar's linear fallback:
+expected usage equals elapsed window percentage. Behind pace is reserve and
+makes the pet very hungry; ahead pace is deficit and makes the pet very happy.
+The current ladder is:
 
 | pace stage | mood |
 |---|---|
-| `slightly_behind` | `peckish` |
-| `behind` | `hungry` |
-| `far_behind` | `very hungry` |
-| `on_track`, `slightly_ahead` | `happy` |
-| `ahead` | `excited` |
-| `far_ahead` | `very happy` |
+| `slightly_behind`, `behind`, `far_behind` | `very hungry` |
+| `on_track` | `happy` |
+| `slightly_ahead`, `ahead`, `far_ahead` | `very happy` |
 
 Set `TOKEN_USAGE_SOURCE=local` to force the old transcript-log scanner.
 

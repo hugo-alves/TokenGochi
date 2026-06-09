@@ -16,18 +16,18 @@ void flush();
 void clearToBlack();
 bool writeScreenshot(Stream& out);
 
-// Top status line: WiFi state + age + tokens.
+// Compact round-safe status label. The home screen renders the richer radial
+// usage/state treatment in drawMood().
 void drawStatus(const PetState& s, bool wifiUp, bool bridgeUp);
 
-// Big mood text centered in the disc.
+// Round watch-face home: usage ring, large pet, and short state labels.
 void drawMood(const PetState& s);
 
 // "?" / sad-face fallback when the bridge is unreachable.
 void drawOffline(const char* reason = nullptr);
 
-// Recording overlay — big "REC" text, elapsed seconds, and a moving bar.
-// Pass elapsedS = seconds since recording started.
-void drawRec(uint32_t elapsedS);
+// Recording overlay with a circular countdown around the mic.
+void drawRec(uint32_t elapsedS, uint32_t totalS);
 
 // Shown briefly after KEYA press while the mic/codec is being armed.
 void drawArming();

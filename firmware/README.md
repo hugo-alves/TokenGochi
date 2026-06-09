@@ -7,12 +7,11 @@ It can talk to either the local bridge (`../bridge`) or the Cloudflare worker
 
 ## Quick start
 
-### 1. Install PlatformIO
+### 1. Use the repo PlatformIO wrapper
 
 ```sh
-# CLI
-pipx install platformio    # or: pip3 install --user platformio
-# or use the VSCode extension
+cd ..
+./tools/pio --version
 ```
 
 ### 2. Create `src/secrets.h`
@@ -44,8 +43,8 @@ reset button ~2 s until the green LED lights, then:
 
 ```sh
 cd firmware
-pio run -t upload
-pio device monitor        # optional, 115200 baud
+../tools/pio run -t upload
+../tools/pio device monitor        # optional, 115200 baud
 ```
 
 First build downloads the ESP32 toolchain + M5Unified + ArduinoJson
@@ -88,17 +87,18 @@ When booted, the StopWatch:
 1. Connects to WiFi.
 2. Pings the bridge at `PROXY_URL` to confirm it can reach the LAN.
 3. Polls `GET /pet/state` every 30 s and renders the pet face on the round AMOLED (yellow happy / orange hungry / blue sleepy / green sick, with a 4-frame blink animation).
-4. **KEYB short** while idle enters voice input mode without recording.
-5. **KEYB short** again starts recording from the MEMS mic. The top of the disc shows `REC` + elapsed seconds + a pulsing red bar. **KEYB short** while recording stops and sends the clip; recording also auto-stops at the selected duration, 10 s by default. **KEYA** cancels recording and returns to the pet without uploading.
-6. When recording completes, the firmware muxes the captured PCM into a 16 kHz/16-bit/mono WAV and POSTs it as `audio/wav` to `PROXY_URL/transcribe`.
-7. The bridge forwards the audio to Groq Whisper and returns `{text, duration_s, lang, ms_groq}`. The firmware stores successful transcripts on the device only for 7 days, capped at 30 entries, then shows the latest transcript word-wrapped across pages; press A or tap the screen to page, B to dismiss.
-8. A short chirp plays for success, a longer low chirp for failure, plus a vibration buzz on success. A `?` icon shows when the bridge is unreachable.
-9. Tapping the bridge every 30 s in the background keeps the mood and food count fresh.
-10. On boot, if the bridge has a `last_msg` from a previous session, it's shown for 3 s as a "last heard:" greeting.
-11. **KEYB hold** while idle → stats view (mood, food today, total tokens, audio runs, WiFi RSSI, bridge host).
-12. **KEYB short** while stats → confirm prompt; **KEYB short** again → cancel; **KEYA short** while confirm → POST `/pet/reset` (new birth time, clear `last_msg`, zero today's audio runs). A success chirp + buzz confirms.
-13. **KEYA + KEYB hold** from pet, voice idle, or stats opens recording-duration settings. Tap 10/20/30 seconds directly, then the watch shows a brief saved confirmation before returning to the pet. Use **KEYB short** to cycle and **KEYA short** to return to the pet.
-14. **KEYA short** from the pet opens device-only transcript history. Use **KEYB short** to move older, **KEYA short** to open the selected transcript, **KEYB short** inside a transcript to return to the list, and **KEYB hold** from the list to return to the pet.
+4. **KEYA short** while idle opens the device-only transcript history.
+5. **KEYB short** while idle enters voice input mode without recording.
+6. **KEYB short** or tapping the mic starts recording from the MEMS mic. The top of the disc shows `REC` + elapsed seconds + a pulsing red bar. **KEYB short** or tapping the mic while recording stops and sends the clip; recording also auto-stops at the selected duration, 10 s by default. **KEYA** cancels recording and returns to the pet without uploading.
+7. When recording completes, the firmware muxes the captured PCM into a 16 kHz/16-bit/mono WAV and POSTs it as `audio/wav` to `PROXY_URL/transcribe`.
+8. The bridge forwards the audio to Groq Whisper and returns `{text, duration_s, lang, ms_groq}`. The firmware stores successful transcripts on the device only for 7 days, capped at 30 entries, then shows the latest transcript word-wrapped across pages; press A or tap the screen to page, B to dismiss.
+9. A short chirp plays for success, a longer low chirp for failure, plus a vibration buzz on success. A `?` icon shows when the bridge is unreachable.
+10. Polling the bridge every 30 s in the background keeps the mood and food count fresh.
+11. On boot, if the bridge has a `last_msg` from a previous session, it's shown for 3 s as a "last heard:" greeting.
+12. **KEYB hold** or tapping the outer home ring while idle opens stats view (mood, food today, total tokens, audio runs, WiFi RSSI, bridge host). **KEYA short**, tap, or timeout returns home.
+13. **KEYB short** while stats opens the reset confirm prompt; **KEYB short** or tapping no cancels; **KEYA short** or tapping yes posts `/pet/reset` (new birth time, clear `last_msg`, zero today's audio runs). A success chirp + buzz confirms.
+14. **KEYA + KEYB hold** from pet, voice idle, or stats opens recording-duration settings. Tap 10/20/30 seconds directly, then the watch shows a brief saved confirmation before returning to the pet. Use **KEYB short** to cycle and **KEYA short** to return to the pet.
+15. In transcript history, use **KEYB short** to move older, **KEYA short** or tap to open the selected transcript, **KEYB short** inside a transcript to return to the list, and **KEYB hold** from the list to return to the pet.
 
 ## Buttons
 
@@ -127,6 +127,11 @@ When booted, the StopWatch:
 | **KEYB hold**           | history list   | back to idle (pet face)                                                |
 | **KEYB short**          | history entry  | back to history list                                                   |
 | **KEYB short**          | error          | dismiss error                                                          |
+| **touch tap**           | idle home ring | show stats view                                                        |
+| **touch tap**           | voice mic      | start recording                                                        |
+| **touch tap**           | recording mic  | stop recording → POST `/transcribe`                                    |
+| **touch tap**           | stats          | back to idle (pet face)                                                |
+| **touch tap**           | confirm yes/no | confirm reset or cancel back to stats                                  |
 | **touch tap**           | settings       | select tapped duration → show saved confirmation → back to idle         |
 | **touch tap**           | showing        | next transcript page                                                   |
 | **touch tap**           | history list   | open selected history entry                                            |
