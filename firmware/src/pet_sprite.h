@@ -12,8 +12,9 @@ namespace pet_sprite {
 uint8_t moodIndex(const char* mood);
 
 // Draw sprite(mood, frame) centered on the disc. Frame is 0..FRAMES-1;
-// invalid values are wrapped.
-void drawCentered(uint8_t moodIdx, uint8_t frame);
+// invalid values are wrapped. Scale is nearest-neighbor so the generated
+// sprite data can stay compact in flash.
+void drawCentered(uint8_t moodIdx, uint8_t frame, uint8_t scale = 1);
 
 // Advance the blink animation. Returns true iff the frame index changed,
 // so the caller knows when to redraw the sprite.

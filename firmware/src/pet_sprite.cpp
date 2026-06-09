@@ -24,21 +24,42 @@ uint8_t moodIndex(const char* mood) {
     return PET_HAPPY;
 }
 
-void drawCentered(uint8_t moodIdx, uint8_t frame) {
+void drawCentered(uint8_t moodIdx, uint8_t frame, uint8_t scale) {
     if (moodIdx >= PET_SPRITE_MOODS) moodIdx = PET_HAPPY;
     frame %= PET_SPRITE_FRAMES;
+    if (scale < 1) scale = 1;
 
-    const int x = SCREEN_CX - PET_SPRITE_W / 2;
-    const int y = SCREEN_CY - PET_SPRITE_H / 2;
+    const int drawW = PET_SPRITE_W * scale;
+    const int drawH = PET_SPRITE_H * scale;
+    const int x = SCREEN_CX - drawW / 2;
+    const int y = SCREEN_CY - drawH / 2;
 
-    // pushImage copies the 16-bit RGB565 pixels from PROGMEM straight to
-    // the framebuffer. `transparent` would chroma-key a color, but we
-    // rely on the sprite's BG (0x0000) matching the disc BG instead.
-    bool oldSwap = ui::target().getSwapBytes();
-    ui::target().setSwapBytes(true);
-    ui::target().pushImage(x, y, PET_SPRITE_W, PET_SPRITE_H,
-                           pet_sprites[moodIdx * PET_SPRITE_FRAMES + frame]);
-    ui::target().setSwapBytes(oldSwap);
+    if (scale == 1) {
+        // pushImage copies the 16-bit RGB565 pixels from PROGMEM straight to
+        // the framebuffer. `transparent` would chroma-key a color, but we
+        // rely on the sprite's BG (0x0000) matching the disc BG instead.
+        bool oldSwap = ui::target().getSwapBytes();
+        ui::target().setSwapBytes(true);
+        ui::target().pushImage(x, y, PET_SPRITE_W, PET_SPRITE_H,
+                               pet_sprites[moodIdx * PET_SPRITE_FRAMES + frame]);
+        ui::target().setSwapBytes(oldSwap);
+        ui::flush();
+        return;
+    }
+
+    ui::target().fillRect(x, y, drawW, drawH, 0x0000);
+    const uint16_t* sprite = pet_sprites[moodIdx * PET_SPRITE_FRAMES + frame];
+    for (int py = 0; py < PET_SPRITE_H; ++py) {
+        for (int px = 0; px < PET_SPRITE_W; ++px) {
+            const uint16_t color = pgm_read_word(&sprite[py * PET_SPRITE_W + px]);
+            if (color == 0x0000) continue;
+            ui::target().fillRect(x + px * scale,
+                                  y + py * scale,
+                                  scale,
+                                  scale,
+                                  color);
+        }
+    }
     ui::flush();
 }
 

@@ -15,6 +15,14 @@ static constexpr uint16_t MOOD_HUNGRY = 0xFD20;  // amber
 static constexpr uint16_t MOOD_PECKISH = 0xFFE0;  // yellow
 static constexpr uint16_t MOOD_SLEEPY = 0x001F;  // blue
 static constexpr uint16_t MOOD_SICK   = 0xF800;  // red
+static constexpr uint16_t RING_DIM    = 0x3186;  // dark grey
+static constexpr uint16_t CHIP_BG     = 0x0841;  // near-black blue/grey
+
+static constexpr uint8_t HOME_PET_SCALE = 2;
+static constexpr int HOME_RING_R = 218;
+static constexpr int HOME_RING_THICKNESS = 7;
+static constexpr int VOICE_BUTTON_R = 92;
+static constexpr float DEG_TO_RAD_F = 0.01745329252f;
 
 static M5Canvas g_canvas(&M5.Display);
 static bool g_canvasReady = false;
@@ -45,6 +53,137 @@ static uint16_t moodColor(const char* mood) {
 
 static void applyDiscClip() {
     target().setClipRect(0, 0, SCREEN_W, SCREEN_H);
+}
+
+static int chordWidthAtYRaw(int y) {
+    const float dy = (float)y - (float)SCREEN_CY;
+    const float r = (float)SCREEN_R;
+    if (fabsf(dy) >= r) return 0;
+    return (int)(sqrtf(r * r - dy * dy) * 2.0f);
+}
+
+static int safeWidthAtY(int y, int pad) {
+    int width = chordWidthAtYRaw(y) - pad * 2;
+    if (width < 0) width = 0;
+    if (width > SCREEN_W - pad * 2) width = SCREEN_W - pad * 2;
+    return width;
+}
+
+static void truncateToWidth(char* text, size_t textSize, int maxWidth) {
+    if (!text || textSize == 0) return;
+    if (maxWidth <= 0) {
+        text[0] = '\0';
+        return;
+    }
+    if ((int)target().textWidth(text) <= maxWidth) return;
+
+    size_t len = strlen(text);
+    while (len > 4 && (int)target().textWidth(text) > maxWidth) {
+        text[--len] = '\0';
+        if (len > 3) {
+            text[len - 1] = '.';
+            text[len - 2] = '.';
+            text[len - 3] = '.';
+        }
+    }
+}
+
+static void drawCenteredSafeText(int y,
+                                 int size,
+                                 uint16_t color,
+                                 const char* text,
+                                 int pad = 24,
+                                 uint16_t bg = BG) {
+    if (!text) return;
+    char line[80];
+    strncpy(line, text, sizeof(line) - 1);
+    line[sizeof(line) - 1] = '\0';
+
+    target().setTextSize(size);
+    target().setTextColor(color, bg);
+    truncateToWidth(line, sizeof(line), safeWidthAtY(y + target().fontHeight() / 2, pad));
+    const int w = target().textWidth(line);
+    target().setCursor(SCREEN_CX - w / 2, y);
+    target().print(line);
+}
+
+static void drawArcDots(int radius,
+                        int startDeg,
+                        int endDeg,
+                        uint16_t color,
+                        int thickness,
+                        int stepDeg = 2) {
+    if (stepDeg < 1) stepDeg = 1;
+    if (endDeg < startDeg) {
+        int tmp = startDeg;
+        startDeg = endDeg;
+        endDeg = tmp;
+    }
+    const int dotR = max(1, thickness / 2);
+    for (int deg = startDeg; deg <= endDeg; deg += stepDeg) {
+        const float rad = (float)deg * DEG_TO_RAD_F;
+        const int x = SCREEN_CX + (int)roundf(cosf(rad) * radius);
+        const int y = SCREEN_CY + (int)roundf(sinf(rad) * radius);
+        target().fillCircle(x, y, dotR, color);
+    }
+}
+
+static void drawCircularProgress(int radius,
+                                 int progressX1000,
+                                 uint16_t color,
+                                 int thickness,
+                                 bool background = true) {
+    if (progressX1000 < 0) progressX1000 = 0;
+    if (progressX1000 > 1000) progressX1000 = 1000;
+    if (background) {
+        drawArcDots(radius, -90, 270, RING_DIM, thickness, 4);
+    }
+    const int endDeg = -90 + (360 * progressX1000) / 1000;
+    drawArcDots(radius, -90, endDeg, color, thickness, 2);
+}
+
+static void drawCircularMarker(int radius, int percentX10, uint16_t color, int markerR) {
+    if (percentX10 < 0) return;
+    if (percentX10 > 1000) percentX10 = 1000;
+    const int deg = -90 + (360 * percentX10) / 1000;
+    const float rad = (float)deg * DEG_TO_RAD_F;
+    const int x = SCREEN_CX + (int)roundf(cosf(rad) * radius);
+    const int y = SCREEN_CY + (int)roundf(sinf(rad) * radius);
+    target().fillCircle(x, y, markerR, BG);
+    target().drawCircle(x, y, markerR, color);
+    target().fillCircle(x, y, max(1, markerR - 3), color);
+}
+
+static void drawCircularChip(int cx, int cy, int r, const char* label, uint16_t accent) {
+    target().fillCircle(cx, cy, r, CHIP_BG);
+    target().drawCircle(cx, cy, r, accent);
+    target().drawCircle(cx, cy, r - 1, RING_DIM);
+
+    target().setTextSize(1);
+    target().setTextColor(FG, CHIP_BG);
+    char line[24];
+    strncpy(line, label ? label : "", sizeof(line) - 1);
+    line[sizeof(line) - 1] = '\0';
+    truncateToWidth(line, sizeof(line), r * 2 - 10);
+    const int w = target().textWidth(line);
+    target().setCursor(cx - w / 2, cy - target().fontHeight() / 2);
+    target().print(line);
+}
+
+static void drawMicIcon(int cx, int cy, uint16_t color, uint16_t fill) {
+    target().fillCircle(cx, cy, VOICE_BUTTON_R, fill);
+    target().drawCircle(cx, cy, VOICE_BUTTON_R, color);
+    target().drawCircle(cx, cy, VOICE_BUTTON_R - 5, RING_DIM);
+
+    target().fillRoundRect(cx - 18, cy - 42, 36, 58, 18, color);
+    target().fillRoundRect(cx - 10, cy - 34, 20, 42, 10, BG);
+    target().drawLine(cx - 34, cy - 10, cx - 34, cy + 10, color);
+    target().drawLine(cx + 34, cy - 10, cx + 34, cy + 10, color);
+    target().drawLine(cx - 34, cy + 10, cx - 22, cy + 28, color);
+    target().drawLine(cx + 34, cy + 10, cx + 22, cy + 28, color);
+    target().drawLine(cx - 22, cy + 28, cx + 22, cy + 28, color);
+    target().drawLine(cx, cy + 42, cx, cy + 62, color);
+    target().drawLine(cx - 24, cy + 62, cx + 24, cy + 62, color);
 }
 
 void init() {
@@ -93,13 +232,7 @@ void clearToBlack() {
 }
 
 static void centeredText(int y, int size, uint16_t color, const char* s) {
-    target().setTextSize(size);
-    target().setTextColor(color, BG);
-    int w = target().textWidth(s);
-    int h = target().fontHeight();
-    target().setCursor(SCREEN_CX - w / 2, y);
-    target().print(s);
-    (void)h;
+    drawCenteredSafeText(y, size, color, s);
     flush();
 }
 
@@ -107,9 +240,16 @@ static bool hasCodexAccountUsage(const PetState& s) {
     return s.codex_usage_percent_x10 >= 0;
 }
 
-static void formatUsagePercent(char* out, size_t outSize, const PetState& s) {
-    int x10 = s.codex_usage_percent_x10;
+static bool hasCodexPace(const PetState& s) {
+    return s.codex_pace_label[0] ||
+           s.codex_pace_kind[0] ||
+           s.codex_expected_percent_x10 >= 0 ||
+           s.codex_pace_delta_x10 != INT16_MIN;
+}
+
+static void formatPercentX10(char* out, size_t outSize, int x10) {
     if (x10 < 0) x10 = 0;
+    if (x10 > 1000) x10 = 1000;
     int whole = x10 / 10;
     int frac = x10 % 10;
     if (frac == 0) {
@@ -119,76 +259,122 @@ static void formatUsagePercent(char* out, size_t outSize, const PetState& s) {
     }
 }
 
-void drawStatus(const PetState& s, bool wifiUp, bool bridgeUp) {
-    target().setTextSize(2);
-    target().setTextColor(wifiUp ? FG : DIM, BG);
+static void formatUsagePercent(char* out, size_t outSize, const PetState& s) {
+    formatPercentX10(out, outSize, s.codex_usage_percent_x10);
+}
 
+static void formatPaceLabel(char* out, size_t outSize, const PetState& s) {
+    if (s.codex_pace_label[0]) {
+        snprintf(out, outSize, "%s", s.codex_pace_label);
+        return;
+    }
+    if (strcmp(s.codex_pace_kind, "on_pace") == 0) {
+        snprintf(out, outSize, "on pace");
+        return;
+    }
+    if (s.codex_pace_kind[0]) {
+        int pct = s.codex_balance_percent_x10 >= 0
+            ? (s.codex_balance_percent_x10 + 5) / 10
+            : 0;
+        snprintf(out, outSize, "%d%% %s", pct, s.codex_pace_kind);
+        return;
+    }
+    snprintf(out, outSize, "weekly pace");
+}
+
+void drawStatus(const PetState& s, bool wifiUp, bool bridgeUp) {
     char line[64];
     if (!wifiUp) {
-        snprintf(line, sizeof(line), "wifi: ?");
+        snprintf(line, sizeof(line), "wifi ?");
     } else if (!bridgeUp) {
-        snprintf(line, sizeof(line), "api: ?");
+        snprintf(line, sizeof(line), "api ?");
+    } else if (hasCodexPace(s)) {
+        formatPaceLabel(line, sizeof(line), s);
     } else if (hasCodexAccountUsage(s)) {
         char pct[12];
         formatUsagePercent(pct, sizeof(pct), s);
-        snprintf(line, sizeof(line), "%s use  %dd %dh",
-                 pct,
-                 (int)(s.age_s / 86400),
-                 (int)((s.age_s % 86400) / 3600));
+        snprintf(line, sizeof(line), "%s weekly", pct);
     } else {
-        snprintf(line, sizeof(line), "%ldk tk  %dd %dh",
-                 (long)(s.food_today / 1000),
-                 (int)(s.age_s / 86400),
-                 (int)((s.age_s % 86400) / 3600));
+        snprintf(line, sizeof(line), "%ldk tk", (long)(s.food_today / 1000));
     }
-    int w = target().textWidth(line);
-    target().setCursor(SCREEN_CX - w / 2, 20);
-    target().print(line);
+    drawCenteredSafeText(28, 2, wifiUp && bridgeUp ? FG : DIM, line, 56);
     flush();
 }
 
 void drawMood(const PetState& s) {
-    // The sprite face itself. Centered, with a thin mood-color border ring
-    // for extra vibe.
-    pet_sprite::drawCentered(pet_sprite::moodIndex(s.mood),
-                             pet_sprite::currentFrame());
+    const uint16_t accent = moodColor(s.mood);
+    int progressX1000 = -1;
+    if (hasCodexAccountUsage(s)) {
+        progressX1000 = s.codex_usage_percent_x10;
+        if (progressX1000 < 0) progressX1000 = 0;
+        if (progressX1000 > 1000) progressX1000 = 1000;
+    }
 
-    // Mood label as small text just above the sprite
-    target().setTextSize(2);
-    target().setTextColor(moodColor(s.mood), BG);
-    const char* lbl = s.mood;
-    int lw = target().textWidth(lbl);
-    target().setCursor(SCREEN_CX - lw / 2, SCREEN_CY - PET_SPRITE_H / 2 - 24);
-    target().print(lbl);
+    if (progressX1000 >= 0) {
+        drawCircularProgress(HOME_RING_R, progressX1000, accent, HOME_RING_THICKNESS);
+        drawCircularMarker(HOME_RING_R, s.codex_expected_percent_x10, FG, 7);
+    } else {
+        drawArcDots(HOME_RING_R, -90, 270, RING_DIM, HOME_RING_THICKNESS, 12);
+        drawArcDots(HOME_RING_R, -90, 30, accent, HOME_RING_THICKNESS, 6);
+    }
+
+    if (hasCodexAccountUsage(s)) {
+        char used[18];
+        char pct[12];
+        formatUsagePercent(pct, sizeof(pct), s);
+        snprintf(used, sizeof(used), "%s used", pct);
+        drawCircularChip(94, SCREEN_CY, 39, used, accent);
+
+        char right[18];
+        if (s.codex_expected_percent_x10 >= 0) {
+            char expPct[12];
+            formatPercentX10(expPct, sizeof(expPct), s.codex_expected_percent_x10);
+            snprintf(right, sizeof(right), "%s exp", expPct);
+        } else if (s.codex_plan[0]) {
+            snprintf(right, sizeof(right), "%s", s.codex_plan);
+        } else {
+            snprintf(right, sizeof(right), "%ldk", (long)(s.food_today / 1000));
+        }
+        drawCircularChip(SCREEN_W - 94, SCREEN_CY, 39, right, FG);
+    } else {
+        char age[16];
+        snprintf(age, sizeof(age), "%dd %dh",
+                 (int)(s.age_s / 86400),
+                 (int)((s.age_s % 86400) / 3600));
+        drawCircularChip(94, SCREEN_CY, 39, age, accent);
+
+        char food[20];
+        snprintf(food, sizeof(food), "%ldk", (long)(s.total_tokens_ever / 1000));
+        drawCircularChip(SCREEN_W - 94, SCREEN_CY, 39, food, accent);
+    }
+
+    // The pet face is the primary object on the watch face.
+    pet_sprite::drawCentered(pet_sprite::moodIndex(s.mood),
+                             pet_sprite::currentFrame(),
+                             HOME_PET_SCALE);
+
+    drawCenteredSafeText(SCREEN_CY + PET_SPRITE_H * HOME_PET_SCALE / 2 + 8,
+                         2,
+                         accent,
+                         s.mood,
+                         86);
 
     // Last message as a single subtitle line, truncated with ellipsis.
     if (s.last_msg[0]) {
         char sub[40];
         snprintf(sub, sizeof(sub), "\"%s\"", s.last_msg);
-        if ((int)target().textWidth(sub) > 360) {
-            int n = (int)strlen(sub);
-            while (n > 6 && (int)target().textWidth(sub) > 360) {
-                sub[--n] = '\0';
-                sub[n - 1] = sub[n - 2] = sub[n - 3] = '.';
-            }
-        }
-        target().setTextSize(2);
-        target().setTextColor(DIM, BG);
-        int w = target().textWidth(sub);
-        target().setCursor(SCREEN_CX - w / 2, SCREEN_CY + PET_SPRITE_H / 2 + 12);
-        target().print(sub);
+        drawCenteredSafeText(374, 2, DIM, sub, 76);
     }
     flush();
 }
 
 void drawOffline(const char* reason) {
-    centeredText(SCREEN_CY - 20, 4, DIM, "api ?");
+    drawArcDots(HOME_RING_R, -90, 270, RING_DIM, HOME_RING_THICKNESS, 12);
+    drawArcDots(HOME_RING_R, -70, -20, MOOD_SICK, HOME_RING_THICKNESS, 4);
+    drawArcDots(HOME_RING_R, 110, 160, MOOD_SICK, HOME_RING_THICKNESS, 4);
+    centeredText(SCREEN_CY - 34, 4, DIM, "api ?");
     if (reason) {
-        target().setTextSize(2);
-        target().setTextColor(DIM, BG);
-        int w = target().textWidth(reason);
-        target().setCursor(SCREEN_CX - w / 2, SCREEN_CY + 20);
-        target().print(reason);
+        drawCenteredSafeText(SCREEN_CY + 20, 2, DIM, reason, 70);
     }
     flush();
 }
@@ -329,6 +515,13 @@ void pageReset() {
 static void renderTranscriptPage() {
     if (!s_showingTranscript || !s_pageText) return;
 
+    if (s_pageCount > 1) {
+        drawCircularProgress(HOME_RING_R,
+                             ((s_pageIndex + 1) * 1000) / s_pageCount,
+                             0x87F0,
+                             4);
+    }
+
     target().setTextSize(2);
     target().setTextColor(FG, BG);
 
@@ -346,18 +539,38 @@ static void renderTranscriptPage() {
         ? s_pageStarts[s_pageIndex + 1]
         : s_pageLen;
     size_t pos = s_pageStarts[s_pageIndex];
-    int y = transcriptTopY();
-    while (pos < pageEnd && y <= TRANSCRIPT_BOTTOM_Y) {
-        size_t end = wrappedLineEnd(pos, maxCharsForY(y));
+    const int topY = transcriptTopY();
+    size_t lineStarts[12];
+    size_t lineEnds[12];
+    int lineCount = 0;
+    int layoutY = topY;
+    while (pos < pageEnd &&
+           layoutY <= TRANSCRIPT_BOTTOM_Y &&
+           lineCount < (int)(sizeof(lineStarts) / sizeof(lineStarts[0]))) {
+        size_t end = wrappedLineEnd(pos, maxCharsForY(layoutY));
         if (end > pageEnd) end = pageEnd;
+        lineStarts[lineCount] = pos;
+        lineEnds[lineCount] = end;
+        lineCount++;
+        pos = end > pos ? end : pos + 1;
+        layoutY += TRANSCRIPT_LINE_H;
+    }
+
+    const int availableH = TRANSCRIPT_BOTTOM_Y - topY + TRANSCRIPT_LINE_H;
+    const int textH = lineCount * TRANSCRIPT_LINE_H;
+    int y = topY;
+    if (textH > 0 && textH < availableH) {
+        y = topY + (availableH - textH) / 2;
+    }
+
+    for (int i = 0; i < lineCount; ++i) {
         char line[80] = {0};
-        copyLine(pos, end, line, sizeof(line));
+        copyLine(lineStarts[i], lineEnds[i], line, sizeof(line));
         if (line[0]) {
             const int w = target().textWidth(line);
             target().setCursor(SCREEN_CX - w / 2, y);
             target().print(line);
         }
-        pos = end > pos ? end : pos + 1;
         y += TRANSCRIPT_LINE_H;
     }
 
@@ -424,20 +637,11 @@ void drawTranscript(const char* text, const char* title, const char* footer) {
 }
 
 void drawHistoryList(size_t count, size_t selectedIndex, const char* meta, const char* preview) {
-    target().setTextSize(3);
-    target().setTextColor(0x87F0, BG);
-    const char* title = "HISTORY";
-    int w = target().textWidth(title);
-    target().setCursor(SCREEN_CX - w / 2, 52);
-    target().print(title);
+    drawArcDots(HOME_RING_R, -90, 270, RING_DIM, HOME_RING_THICKNESS, 12);
+    drawCenteredSafeText(52, 3, 0x87F0, "HISTORY", 78);
 
     if (count == 0) {
-        target().setTextSize(2);
-        target().setTextColor(DIM, BG);
-        const char* empty = "no transcripts";
-        w = target().textWidth(empty);
-        target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 12);
-        target().print(empty);
+        drawCenteredSafeText(SCREEN_CY - 12, 2, DIM, "no transcripts", 76);
         drawHintLine("A: pet");
         flush();
         return;
@@ -445,18 +649,10 @@ void drawHistoryList(size_t count, size_t selectedIndex, const char* meta, const
 
     char pos[24];
     snprintf(pos, sizeof(pos), "%u/%u", (unsigned)(selectedIndex + 1), (unsigned)count);
-    target().setTextSize(2);
-    target().setTextColor(FG, BG);
-    w = target().textWidth(pos);
-    target().setCursor(SCREEN_CX - w / 2, 104);
-    target().print(pos);
+    drawCenteredSafeText(100, 2, FG, pos, 80);
 
     if (meta && *meta) {
-        target().setTextSize(1);
-        target().setTextColor(DIM, BG);
-        w = target().textWidth(meta);
-        target().setCursor(SCREEN_CX - w / 2, 132);
-        target().print(meta);
+        drawCenteredSafeText(130, 1, DIM, meta, 80);
     }
 
     target().setTextSize(2);
@@ -486,7 +682,7 @@ void drawHistoryList(size_t count, size_t selectedIndex, const char* meta, const
         if (n >= sizeof(line)) n = sizeof(line) - 1;
         memcpy(line, text + posText, n);
         line[n] = '\0';
-        w = target().textWidth(line);
+        int w = target().textWidth(line);
         target().setCursor(SCREEN_CX - w / 2, y);
         target().print(line);
         posText = end > posText ? end : posText + 1;
@@ -509,248 +705,188 @@ void drawArming() {
 }
 
 void drawVoiceReady() {
-    target().setTextSize(3);
-    target().setTextColor(0x87F0, BG);
-    const char* label = "VOICE";
-    int w = target().textWidth(label);
-    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 66);
-    target().print(label);
-
-    target().setTextSize(2);
-    target().setTextColor(FG, BG);
-    const char* ready = "ready";
-    w = target().textWidth(ready);
-    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 20);
-    target().print(ready);
-
-    target().setTextSize(1);
-    target().setTextColor(DIM, BG);
-    const char* hint = "B: record  |  A: pet";
-    w = target().textWidth(hint);
-    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY + 34);
-    target().print(hint);
+    drawArcDots(HOME_RING_R, -60, 240, RING_DIM, HOME_RING_THICKNESS, 8);
+    drawCenteredSafeText(54, 3, 0x87F0, "VOICE", 80);
+    drawMicIcon(SCREEN_CX, SCREEN_CY + 18, 0x87F0, 0x0208);
+    drawCenteredSafeText(SCREEN_CY + 132, 1, DIM, "tap mic or B", 64);
+    drawHintLine("A: pet");
     flush();
 }
 
 void drawDurationSettings(uint32_t selectedSeconds) {
-    target().setTextSize(3);
-    target().setTextColor(0x87F0, BG);
-    const char* title = "VOICE";
-    int w = target().textWidth(title);
-    target().setCursor(SCREEN_CX - w / 2, 46);
-    target().print(title);
-
-    target().setTextSize(2);
-    target().setTextColor(FG, BG);
-    const char* subtitle = "recording length";
-    w = target().textWidth(subtitle);
-    target().setCursor(SCREEN_CX - w / 2, 90);
-    target().print(subtitle);
+    drawCenteredSafeText(46, 3, 0x87F0, "VOICE", 80);
+    drawCenteredSafeText(90, 2, FG, "recording length", 70);
 
     static constexpr uint32_t OPTIONS[] = {10, 20, 30};
-    static constexpr int BOX_W = 220;
-    static constexpr int BOX_H = 54;
-    static constexpr int BOX_X = SCREEN_CX - BOX_W / 2;
-    static constexpr int BOX_Y[] = {142, 214, 286};
+    static constexpr int CIRCLE_R = 49;
+    static constexpr int OPTION_X[] = {142, 233, 324};
+    static constexpr int OPTION_Y[] = {248, 184, 248};
 
     for (size_t i = 0; i < sizeof(OPTIONS) / sizeof(OPTIONS[0]); ++i) {
         const bool selected = selectedSeconds == OPTIONS[i];
         const uint16_t border = selected ? 0x07E0 : DIM;
         const uint16_t fill = selected ? 0x0340 : BG;
-        target().fillRoundRect(BOX_X, BOX_Y[i], BOX_W, BOX_H, 8, fill);
-        target().drawRoundRect(BOX_X, BOX_Y[i], BOX_W, BOX_H, 8, border);
+        target().fillCircle(OPTION_X[i], OPTION_Y[i], CIRCLE_R, fill);
+        target().drawCircle(OPTION_X[i], OPTION_Y[i], CIRCLE_R, border);
+        if (selected) {
+            target().drawCircle(OPTION_X[i], OPTION_Y[i], CIRCLE_R - 5, border);
+        }
 
         char label[16];
-        snprintf(label, sizeof(label), "%lu sec", (unsigned long)OPTIONS[i]);
-        target().setTextSize(2);
+        snprintf(label, sizeof(label), "%lus", (unsigned long)OPTIONS[i]);
+        target().setTextSize(3);
         target().setTextColor(selected ? 0x07E0 : FG, fill);
-        w = target().textWidth(label);
-        target().setCursor(SCREEN_CX - w / 2, BOX_Y[i] + 17);
+        int w = target().textWidth(label);
+        target().setCursor(OPTION_X[i] - w / 2,
+                           OPTION_Y[i] - target().fontHeight() / 2);
         target().print(label);
     }
 
-    drawHintLine("tap option  |  B cycle  |  A pet");
+    drawHintLine("tap duration  |  B cycle");
     flush();
 }
 
 void drawDurationSaved(uint32_t selectedSeconds) {
-    target().setTextSize(2);
-    target().setTextColor(DIM, BG);
-    const char* saved = "recording length";
-    int w = target().textWidth(saved);
-    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 70);
-    target().print(saved);
+    drawArcDots(HOME_RING_R, -80, 260, RING_DIM, HOME_RING_THICKNESS, 8);
+    drawCenteredSafeText(SCREEN_CY - 78, 2, DIM, "recording length", 72);
 
     target().setTextSize(4);
     target().setTextColor(0x07E0, BG);
     char label[16];
     snprintf(label, sizeof(label), "%lus", (unsigned long)selectedSeconds);
-    w = target().textWidth(label);
+    int w = target().textWidth(label);
     target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 22);
     target().print(label);
 
-    target().setTextSize(2);
-    target().setTextColor(FG, BG);
-    const char* ok = "saved";
-    w = target().textWidth(ok);
-    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY + 34);
-    target().print(ok);
+    drawCenteredSafeText(SCREEN_CY + 42, 2, FG, "saved", 76);
     flush();
 }
 
-void drawRec(uint32_t elapsedS) {
-    target().setTextSize(3);
-    target().setTextColor(0xF800, BG);  // red
-    const char* label = "REC";
-    int w = target().textWidth(label);
-    target().setCursor(SCREEN_CX - w / 2, 30);
-    target().print(label);
+void drawRec(uint32_t elapsedS, uint32_t totalS) {
+    target().fillRect(0, 50, SCREEN_W, SCREEN_H - 82, BG);
+    drawCenteredSafeText(58, 3, 0xF800, "REC", 92);
 
     char t[16];
-    snprintf(t, sizeof(t), "%lus", (unsigned long)elapsedS);
-    target().setTextSize(2);
-    w = target().textWidth(t);
-    target().setCursor(SCREEN_CX - w / 2, 80);
-    target().print(t);
-
-    // "bar" that pulses — width based on millis
-    int wBar = 100 + (millis() / 8) % 200;
-    target().fillRoundRect(SCREEN_CX - wBar / 2, 360, wBar, 8, 4, 0xF800);
-
-    target().setTextSize(1);
-    target().setTextColor(DIM, BG);
-    const char* hint = "B: send  |  A: cancel";
-    w = target().textWidth(hint);
-    target().setCursor(SCREEN_CX - w / 2, SCREEN_H - 18);
-    target().print(hint);
+    if (totalS == 0) totalS = 1;
+    if (elapsedS > totalS) elapsedS = totalS;
+    snprintf(t, sizeof(t), "%lus", (unsigned long)(totalS - elapsedS));
+    drawCircularProgress(128, (int)((elapsedS * 1000UL) / totalS), 0xF800, 8);
+    drawMicIcon(SCREEN_CX, SCREEN_CY + 10, 0xF800, 0x1800);
+    drawCenteredSafeText(SCREEN_CY + 132, 3, FG, t, 80);
+    drawHintLine("tap/B send  |  A cancel");
     flush();
 }
 
 // ---------------------------------------------------------------- thinking ---
 void drawThinking() {
-    target().setTextSize(2);
-    target().setTextColor(DIM, BG);
-    const char* label = "sending...";
-    int w = target().textWidth(label);
-    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 12);
-    target().print(label);
+    drawArcDots(HOME_RING_R, -90, 270, RING_DIM, HOME_RING_THICKNESS, 12);
+    const int sweep = 72;
+    const int start = -90 + (int)((millis() / 8) % 360);
+    drawArcDots(128, start, start + sweep, 0x87F0, 8, 2);
+    centeredText(SCREEN_CY - 12, 2, DIM, "sending...");
     flush();
 }
 
 // ---------------------------------------------------------------- stats ------
 void drawStats(const PetState& s, int rssi, const char* proxyUrl) {
-    target().setTextSize(2);
-    target().setTextColor(FG, BG);
+    const uint16_t accent = moodColor(s.mood);
+    drawArcDots(HOME_RING_R, -90, 270, RING_DIM, HOME_RING_THICKNESS, 10);
+    if (hasCodexAccountUsage(s)) {
+        int progressX1000 = s.codex_usage_percent_x10;
+        if (progressX1000 < 0) progressX1000 = 0;
+        if (progressX1000 > 1000) progressX1000 = 1000;
+        drawCircularProgress(HOME_RING_R, progressX1000, accent, HOME_RING_THICKNESS, false);
+        drawCircularMarker(HOME_RING_R, s.codex_expected_percent_x10, FG, 7);
+    } else {
+        drawArcDots(HOME_RING_R, -90, 50, accent, HOME_RING_THICKNESS, 6);
+    }
 
     char line[40];
-    int y = 30;
-    int lineH = 28;
-
-    // Header
-    target().setTextColor(moodColor(s.mood), BG);
-    snprintf(line, sizeof(line), "stats: %s", s.mood);
-    int w = target().textWidth(line);
-    target().setCursor(SCREEN_CX - w / 2, y); target().print(line);
-    y += lineH;
-    target().setTextColor(FG, BG);
+    if (hasCodexPace(s)) {
+        formatPaceLabel(line, sizeof(line), s);
+    } else if (hasCodexAccountUsage(s)) {
+        char pct[12];
+        formatUsagePercent(pct, sizeof(pct), s);
+        snprintf(line, sizeof(line), "%s weekly", pct);
+    } else {
+        snprintf(line, sizeof(line), "%ldk today", (long)(s.food_today / 1000));
+    }
+    drawCenteredSafeText(72, 2, accent, line, 64);
 
     if (hasCodexAccountUsage(s)) {
         char pct[12];
         formatUsagePercent(pct, sizeof(pct), s);
-        snprintf(line, sizeof(line), "usage:  %s", pct);
+        snprintf(line, sizeof(line), "%s used", pct);
     } else {
-        snprintf(line, sizeof(line), "today:  %ldk", (long)(s.food_today / 1000));
+        snprintf(line, sizeof(line), "%ldk total", (long)(s.total_tokens_ever / 1000));
     }
-    w = target().textWidth(line);
-    target().setCursor(SCREEN_CX - w / 2, y); target().print(line);
-    y += lineH;
+    drawCircularChip(112, SCREEN_CY - 18, 45, line, accent);
+
+    if (hasCodexAccountUsage(s) && s.codex_expected_percent_x10 >= 0) {
+        char pct[12];
+        formatPercentX10(pct, sizeof(pct), s.codex_expected_percent_x10);
+        snprintf(line, sizeof(line), "%s exp", pct);
+    } else {
+        snprintf(line, sizeof(line), "%d chats", s.audio_runs_today);
+    }
+    drawCircularChip(SCREEN_W - 112, SCREEN_CY - 18, 45, line, 0x87F0);
 
     if (hasCodexAccountUsage(s) && s.codex_plan[0]) {
-        snprintf(line, sizeof(line), "plan:   %s", s.codex_plan);
+        snprintf(line, sizeof(line), "%s", s.codex_plan);
     } else {
-        snprintf(line, sizeof(line), "total:  %ldk", (long)(s.total_tokens_ever / 1000));
+        snprintf(line, sizeof(line), "%d dBm", rssi);
     }
-    w = target().textWidth(line);
-    target().setCursor(SCREEN_CX - w / 2, y); target().print(line);
-    y += lineH;
+    drawCircularChip(SCREEN_CX, SCREEN_CY + 84, 43, line, rssi > -70 ? 0x07E0 : 0xFD20);
 
-    snprintf(line, sizeof(line), "chats:  %d", s.audio_runs_today);
-    w = target().textWidth(line);
-    target().setCursor(SCREEN_CX - w / 2, y); target().print(line);
-    y += lineH;
-
-    snprintf(line, sizeof(line), "rssi:   %d dBm", rssi);
-    w = target().textWidth(line);
-    target().setCursor(SCREEN_CX - w / 2, y); target().print(line);
-    y += lineH;
+    drawCenteredSafeText(SCREEN_CY - 34, 3, accent, s.mood, 78);
 
     // Truncate URL visually by skipping the scheme
     const char* host = strstr(proxyUrl, "://");
     host = host ? host + 3 : proxyUrl;
-    snprintf(line, sizeof(line), "api:    %s", host);
-    w = target().textWidth(line);
-    target().setCursor(SCREEN_CX - w / 2, y); target().print(line);
-    y += lineH;
+    snprintf(line, sizeof(line), "api %s", host);
+    drawCenteredSafeText(360, 1, DIM, line, 76);
 
-    drawHintLine("B: reset?  |  A: home");
+    drawHintLine("tap/A home  |  B reset?");
     flush();
 }
 
 void drawHintLine(const char* s) {
-    target().setTextSize(1);
-    target().setTextColor(DIM, BG);
-    int w = target().textWidth(s);
-    target().setCursor(SCREEN_CX - w / 2, SCREEN_H - 18);
-    target().print(s);
+    drawCenteredSafeText(SCREEN_H - 28, 1, DIM, s, 40);
     flush();
 }
 
 void drawGreeting(const char* lastMsg) {
-    target().setTextSize(2);
-    target().setTextColor(DIM, BG);
-    target().setCursor(SCREEN_CX - target().textWidth("last heard:") / 2, 60);
-    target().print("last heard:");
+    drawArcDots(HOME_RING_R, -90, 270, RING_DIM, HOME_RING_THICKNESS, 12);
+    drawCenteredSafeText(88, 2, DIM, "last heard:", 80);
 
-    target().setTextSize(2);
-    target().setTextColor(FG, BG);
-    int y = 100;
     char buf[64];
     snprintf(buf, sizeof(buf), "\"%s\"", lastMsg);
-    int w = target().textWidth(buf);
-    if (w > 360) {
-        // crude truncation with ellipsis
-        int n = (int)strlen(buf);
-        while (n > 6 && target().textWidth(buf) > 360) {
-            buf[--n] = '\0';
-            buf[n - 1] = buf[n - 2] = buf[n - 3] = '.';
-        }
-        w = target().textWidth(buf);
-    }
-    target().setCursor(SCREEN_CX - w / 2, y);
-    target().print(buf);
+    drawCenteredSafeText(132, 2, FG, buf, 62);
     flush();
 }
 
 void drawConfirmReset() {
-    target().setTextSize(3);
-    target().setTextColor(0xFD20, BG);   // amber
-    const char* q = "reset pet?";
-    int w = target().textWidth(q);
-    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 30);
-    target().print(q);
+    drawArcDots(HOME_RING_R, -90, 270, RING_DIM, HOME_RING_THICKNESS, 10);
+    drawCenteredSafeText(SCREEN_CY - 64, 3, 0xFD20, "reset pet?", 78);
 
+    const int yesX = SCREEN_CX - 70;
+    const int noX = SCREEN_CX + 70;
+    const int actionY = SCREEN_CY + 38;
+
+    target().fillCircle(yesX, actionY, 48, 0x0300);
+    target().drawCircle(yesX, actionY, 48, 0x07E0);
     target().setTextSize(2);
-    target().setTextColor(0x07E0, BG);   // green
-    const char* yes = "A: yes";
-    w = target().textWidth(yes);
-    target().setCursor(SCREEN_CX - 60, SCREEN_CY + 20);
-    target().print(yes);
+    target().setTextColor(0x07E0, 0x0300);
+    int w = target().textWidth("A yes");
+    target().setCursor(yesX - w / 2, actionY - target().fontHeight() / 2);
+    target().print("A yes");
 
-    target().setTextColor(0xF800, BG);   // red
-    const char* no = "B: no";
-    w = target().textWidth(no);
-    target().setCursor(SCREEN_CX + 20, SCREEN_CY + 20);
-    target().print(no);
+    target().fillCircle(noX, actionY, 48, 0x1800);
+    target().drawCircle(noX, actionY, 48, 0xF800);
+    target().setTextColor(0xF800, 0x1800);
+    w = target().textWidth("B no");
+    target().setCursor(noX - w / 2, actionY - target().fontHeight() / 2);
+    target().print("B no");
     flush();
 }
 

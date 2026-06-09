@@ -164,14 +164,12 @@ function recordTranscription(text) {
 // ---------------------------------------------------------------- mood -------
 // Rule-based. See PLAN.md §4.2.
 export function computeMood(foodToday, now = new Date(), usage = null) {
-  const paceStage = usage?.codex?.pace?.stage || null;
-  if (paceStage) {
-    if (paceStage === "far_behind") return "very hungry";
-    if (paceStage === "behind") return "hungry";
-    if (paceStage === "slightly_behind") return "peckish";
-    if (paceStage === "far_ahead") return "very happy";
-    if (paceStage === "ahead") return "excited";
-    if (paceStage === "slightly_ahead" || paceStage === "on_track") return "happy";
+  const pace = usage?.codex?.pace || null;
+  const balanceKind = pace?.balance_kind || paceKindForStage(pace?.stage);
+  if (balanceKind) {
+    if (balanceKind === "reserve") return "very hungry";
+    if (balanceKind === "deficit") return "very happy";
+    if (balanceKind === "on_pace") return "happy";
   }
 
   const h = now.getHours();
@@ -510,6 +508,31 @@ export function paceStage(deltaPercent) {
   return delta >= 0 ? "far_ahead" : "far_behind";
 }
 
+function paceKindForStage(stage) {
+  if (!stage) return null;
+  if (stage === "on_track") return "on_pace";
+  if (stage === "slightly_ahead" || stage === "ahead" || stage === "far_ahead") return "deficit";
+  if (stage === "slightly_behind" || stage === "behind" || stage === "far_behind") return "reserve";
+  return null;
+}
+
+export function paceBalance(deltaPercent, stage = paceStage(deltaPercent)) {
+  const kind = paceKindForStage(stage);
+  if (!kind) return null;
+  if (kind === "on_pace") {
+    return { kind, percent: 0, label: "on pace" };
+  }
+
+  const delta = Number(deltaPercent);
+  const percent = Number.isFinite(delta) ? Math.round(Math.abs(delta) * 10) / 10 : 0;
+  const displayPercent = Math.round(percent);
+  return {
+    kind,
+    percent,
+    label: `${displayPercent}% ${kind}`,
+  };
+}
+
 export function accountUsagePace(window, nowMs = Date.now()) {
   if (!window || typeof window !== "object") return null;
   const actual = clampPercent(window.used_percent);
@@ -539,11 +562,17 @@ export function accountUsagePace(window, nowMs = Date.now()) {
     willLastToReset = true;
   }
 
+  const stage = paceStage(delta);
+  const balance = paceBalance(delta, stage);
   return {
-    stage: paceStage(delta),
+    window: "weekly",
+    stage,
     delta_percent: Math.round(delta * 10) / 10,
     expected_used_percent: Math.round(expected * 10) / 10,
     actual_used_percent: Math.round(actual * 10) / 10,
+    balance_kind: balance?.kind ?? null,
+    balance_percent: balance?.percent ?? null,
+    balance_label: balance?.label ?? null,
     eta_seconds: etaSeconds,
     will_last_to_reset: willLastToReset,
   };
@@ -554,9 +583,7 @@ export function accountUsageMetadata(usage) {
   const secondary = usage?.rate_limit?.secondary_window || null;
   const primaryPercent = clampPercent(primary?.used_percent);
   const secondaryPercent = clampPercent(secondary?.used_percent);
-  const metricPercent = primaryPercent != null && secondaryPercent != null
-    ? (primaryPercent + secondaryPercent) / 2
-    : (primaryPercent ?? secondaryPercent ?? 0);
+  const metricPercent = secondaryPercent ?? primaryPercent ?? 0;
   const additional = Array.isArray(usage?.additional_rate_limits)
     ? usage.additional_rate_limits.map((item) => ({
         limit_name: item?.limit_name || null,
@@ -573,6 +600,7 @@ export function accountUsageMetadata(usage) {
     primary_used_percent: primaryPercent,
     secondary_used_percent: secondaryPercent,
     metric_used_percent: metricPercent,
+    metric_window: secondaryPercent != null ? "weekly" : (primaryPercent != null ? "session" : "none"),
     primary_reset_at: primary?.reset_at || null,
     secondary_reset_at: secondary?.reset_at || null,
     pace: accountUsagePace(secondary),

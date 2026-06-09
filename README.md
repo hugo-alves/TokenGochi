@@ -53,24 +53,22 @@ Then choose where token totals come from.
 By default, the bridge uses the same Codex account-usage source as CodexBar
 when `~/.codex/auth.json` contains OAuth login tokens. That reports subscription
 rate-limit usage as a percentage, not raw local session tokens. TokenGochi maps
-1% account usage to 1000 food units for the backend contract, and the firmware
-displays the account percentage when that metadata is present. If account usage
-is unavailable in `TOKEN_USAGE_SOURCE=auto`, the bridge falls back to local
-Claude/Codex transcript logs.
+1% weekly account usage to 1000 food units for the backend contract, and the
+firmware displays the weekly account percentage when that metadata is present.
+If account usage is unavailable in `TOKEN_USAGE_SOURCE=auto`, the bridge falls
+back to local Claude/Codex transcript logs.
 
 For Codex account usage, the pet mood is driven by pace against the weekly
 window. TokenGochi uses CodexBar's linear pace fallback: expected usage is the
 elapsed fraction of the reset window, and actual usage is compared against it
-with CodexBar's 2% / 6% / 12% thresholds. Behind pace means you are leaving
-tokens unused, so the pet becomes progressively more hungry; ahead of pace
-makes it progressively happier:
+with CodexBar's 2% / 6% / 12% thresholds. Behind pace is shown as reserve:
+you are leaving weekly tokens unused, so the pet becomes very hungry. Ahead of
+pace is shown as deficit: you are spending faster than the even weekly pace, so
+the pet becomes very happy.
 
-- `slightly_behind` -> `peckish`
-- `behind` -> `hungry`
-- `far_behind` -> `very hungry`
-- `on_track` / `slightly_ahead` -> `happy`
-- `ahead` -> `excited`
-- `far_ahead` -> `very happy`
+- `slightly_behind` / `behind` / `far_behind` -> `very hungry`
+- `on_track` -> `happy`
+- `slightly_ahead` / `ahead` / `far_ahead` -> `very happy`
 
 Push snapshots from the current machine:
 
@@ -115,19 +113,19 @@ cp src/secrets.h.example src/secrets.h
 # edit src/config.h to set PROXY_URL to your selected backend URL
 ```
 
-Install PlatformIO once:
+Use the repo PlatformIO wrapper. It runs PlatformIO through `uv` with a
+supported Python version:
 
 ```sh
-pipx install platformio        # or: pip3 install --user platformio
-# (system Python 3.10–3.13 required; see "Troubleshooting" if you have 3.14+)
+../tools/pio --version
 ```
 
 Put the StopWatch into download mode (hold the side button ~2 s until the
 green LED is solid), then:
 
 ```sh
-pio run -t upload
-pio device monitor             # optional: 115200 baud serial log
+../tools/pio run -t upload
+../tools/pio device monitor     # optional: 115200 baud serial log
 ```
 
 ### 4. Use the device
@@ -135,10 +133,11 @@ pio device monitor             # optional: 115200 baud serial log
 | action                                  | how                                            |
 |-----------------------------------------|------------------------------------------------|
 | See the pet’s mood on the disc          | just look at it (polls every 30 s)             |
-| Check stats (mood / today / total / RSSI)| hold KEYB                                      |
-| Reset the pet (new birth, clear chat)   | hold KEYB → KEYB → KEYA in the confirm overlay |
+| Check stats (mood / today / total / RSSI)| hold KEYB or tap the outer home ring           |
+| Return home from stats                  | tap the stats screen or short-press KEYA       |
+| Reset the pet (new birth, clear chat)   | stats → KEYB → KEYA, or tap yes in confirm     |
 | Enter voice input mode                  | short-press KEYB                               |
-| Record and send voice                   | short-press KEYB again, then KEYB to send      |
+| Record and send voice                   | short-press KEYB or tap mic, then KEYB/tap mic |
 | Cancel voice recording                  | press KEYA while recording                     |
 | Change recording duration               | hold KEYA + KEYB, then tap 10/20/30 s          |
 | Page through the transcript              | short-press KEYA or tap the screen while reading|
@@ -215,7 +214,7 @@ end so it leaves no side effects.
 
 | symptom                                          | fix                                                                                  |
 |--------------------------------------------------|--------------------------------------------------------------------------------------|
-| `PlatformIO requires Python 3.10–3.13`           | Use a venv with `python3.12 -m venv .venv && .venv/bin/pip install platformio`        |
+| `PlatformIO requires Python 3.10–3.13`           | Use `./tools/pio` from the repo root; it runs PlatformIO through `uv` with Python 3.12 |
 | `/transcribe → 503`                              | Add `GROQ_API_KEY` to `bridge/.env`; the bridge doesn’t crash, it just refuses       |
 | Watch stuck on `wifi failed`                     | Wrong SSID/pass in `secrets.h`; the 2.4 GHz radio only (no 5 GHz)                     |
 | `bridge down` icon on the watch                 | `ping <PROXY_URL host>` from the watch’s WiFi; check `bridge/bridge.log`             |

@@ -15,12 +15,20 @@ struct PetState {
     int32_t  ts;                // unix seconds, server clock
     int32_t  breakdown_claude;
     int32_t  breakdown_codex;
-    int16_t  codex_usage_percent_x10;  // -1 when backend is reporting raw tokens
+    int16_t  codex_usage_percent_x10;     // weekly actual, -1 when reporting raw tokens
+    int16_t  codex_expected_percent_x10;  // weekly expected pace, -1 when unavailable
+    int16_t  codex_pace_delta_x10;        // actual - expected, signed, -32768 when unavailable
+    int16_t  codex_balance_percent_x10;   // abs(delta), -1 when unavailable
     char     codex_plan[16];
+    char     codex_pace_kind[12];         // reserve, deficit, on_pace
+    char     codex_pace_label[24];        // e.g. "12% reserve"
 };
 
 inline void petStateReset(PetState& s) {
     memset(&s, 0, sizeof(s));
     strncpy(s.mood, "unknown", sizeof(s.mood) - 1);
     s.codex_usage_percent_x10 = -1;
+    s.codex_expected_percent_x10 = -1;
+    s.codex_pace_delta_x10 = INT16_MIN;
+    s.codex_balance_percent_x10 = -1;
 }
