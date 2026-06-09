@@ -131,7 +131,7 @@ assert(mockLastRequest.contentType.startsWith("multipart/form-data; boundary="),
 assert.equal(mockLastRequest.authorization, "Bearer mock-groq-key");
 assert(mockLastRequest.body.includes("Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\""), "file part header");
 assert(mockLastRequest.body.includes("Content-Disposition: form-data; name=\"model\""), "model part header");
-assert(mockLastRequest.body.includes("whisper-large-v3-turbo"), "model value");
+assert(mockLastRequest.body.includes("whisper-large-v3"), "model value");
 assert(mockLastRequest.body.includes(Buffer.from("RIFF")), "wav header inside body");
 assert(mockLastRequest.body.includes(makeWav(1.0)), "wav bytes inside body");
 console.log("test 2 (multipart envelope to groq): ok");

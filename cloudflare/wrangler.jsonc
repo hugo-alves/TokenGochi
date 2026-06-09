@@ -17,7 +17,7 @@
         }
       ],
       "vars": {
-        "GROQ_WHISPER_MODEL": "whisper-large-v3-turbo",
+        "GROQ_WHISPER_MODEL": "whisper-large-v3",
         "GROQ_URL": "https://api.groq.com/openai/v1/audio/transcriptions",
         "TOKEN_SOURCE_MAX_AGE_SECONDS": "75"
       },
@@ -35,7 +35,7 @@
         }
       ],
       "vars": {
-        "GROQ_WHISPER_MODEL": "whisper-large-v3-turbo",
+        "GROQ_WHISPER_MODEL": "whisper-large-v3",
         "GROQ_URL": "https://api.groq.com/openai/v1/audio/transcriptions",
         "TOKEN_SOURCE_MAX_AGE_SECONDS": "75"
       },

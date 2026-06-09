@@ -185,7 +185,7 @@ async function onWatchTranscribe(req: Request, env: Env): Promise<Response> {
 
   const bytes = wav.body!.byteLength;
   const durationMs = wavDurationMs(wav.body!) ?? 0;
-  const model = env.GROQ_WHISPER_MODEL || "whisper-large-v3-turbo";
+  const model = env.GROQ_WHISPER_MODEL || "whisper-large-v3";
   console.log(`[transcribe:${traceId}] recv content_type=${JSON.stringify(contentType)} bytes=${bytes} duration_ms=${durationMs}`);
   console.log(`[transcribe:${traceId}] send groq model=${JSON.stringify(model)} bytes=${bytes}`);
 
@@ -259,7 +259,7 @@ export default {
         ok: true,
         version: WORKER_VERSION,
         groq_configured: Boolean(env.GROQ_API_KEY),
-        whisper_model: env.GROQ_WHISPER_MODEL || "whisper-large-v3-turbo",
+        whisper_model: env.GROQ_WHISPER_MODEL || "whisper-large-v3",
         token_source_configured: tokenSourceConfigured(env),
       });
     }
