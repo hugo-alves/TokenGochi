@@ -43,6 +43,9 @@ uint32_t elapsedSeconds();
 // until the next call to startRecording() or chirp().
 bool stopRecording(const uint8_t** wavOut, size_t* sizeOut);
 
+// Stop recording, free the mic, and discard the captured PCM.
+void cancelRecording();
+
 // Play a short tone (for button press / error chirps). Blocks for `ms`.
 // Re-enables the speaker and disables the mic if needed.
 void chirp(uint16_t freqHz, uint16_t ms);

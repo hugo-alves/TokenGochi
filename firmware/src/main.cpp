@@ -19,7 +19,7 @@ static uint32_t     g_lastPoll   = 0;
 static uint32_t     g_lastRecon  = 0;
 static uint32_t     g_lastRecRedraw = 0;
 
-enum class Mode : uint8_t { IDLE, RECORDING, TRANSCRIBING, SHOWING, STATS, CONFIRM, ERROR };
+enum class Mode : uint8_t { IDLE, VOICE_IDLE, RECORDING, TRANSCRIBING, SHOWING, STATS, CONFIRM, ERROR };
 static Mode         g_mode = Mode::IDLE;
 static char         g_lastTranscript[512];
 static char         g_lastError[64];
@@ -27,6 +27,7 @@ static uint32_t     g_errorAtMs = 0;
 static uint32_t     g_statsAtMs = 0;       // when stats view opened
 static uint32_t     g_greetingUntilMs = 0; // hide greeting after this
 static bool         g_greetOnFirstPoll = true;
+static bool         g_suppressBClickUntilRelease = false;
 
 static constexpr uint32_t ERROR_HOLD_MS  = 3000; // show error then return
 static constexpr uint32_t STATS_TIMEOUT_MS = 8000; // auto-dismiss stats view
@@ -34,6 +35,30 @@ static constexpr uint32_t CONFIRM_TIMEOUT_MS = 5000;
 static constexpr uint32_t GREETING_HOLD_MS = 3000;
 
 // --- helpers ---------------------------------------------------------------
+static void transcribeAndShow(const uint8_t* wav, size_t size);
+
+static uint32_t wavDurationMs(size_t wavSize) {
+    if (wavSize <= 44) return 0;
+    return (uint32_t)(((wavSize - 44) * 1000UL) / 32000UL);
+}
+
+static void logBodyPreview(const char* tag, const char* body, size_t bodyLen) {
+    if (!body || bodyLen == 0) return;
+    size_t previewLen = bodyLen;
+    if (previewLen > 240) previewLen = 240;
+
+    char preview[241];
+    memcpy(preview, body, previewLen);
+    preview[previewLen] = '\0';
+    for (size_t i = 0; i < previewLen; ++i) {
+        if (preview[i] == '\r' || preview[i] == '\n') preview[i] = ' ';
+    }
+    Serial.printf("[transcribe:%s] body_preview=\"%s\"%s\n",
+                  tag,
+                  preview,
+                  bodyLen > previewLen ? "..." : "");
+}
+
 static void drawBootScreen(const char* line2, uint16_t color) {
     ui::target().setTextSize(2);
     ui::target().setTextColor(0xFFFF, 0x0000);
@@ -121,6 +146,24 @@ static void connectWifi() {
 static void chirpOk()   { audio::chirp(1200, 80); }
 static void chirpFail() { audio::chirp(400, 200); }
 
+static bool btnBClicked() {
+    if (g_suppressBClickUntilRelease) {
+        if (!M5.BtnB.isPressed()) {
+            g_suppressBClickUntilRelease = false;
+        }
+        return false;
+    }
+    return M5.BtnB.wasClicked();
+}
+
+static bool btnBHold() {
+    if (M5.BtnB.wasHold()) {
+        g_suppressBClickUntilRelease = true;
+        return true;
+    }
+    return false;
+}
+
 // Pull the "text" field out of a JSON response like `{"text": "...", ...}`.
 static void extractTranscript(const char* json, char* out, size_t outSize) {
     out[0] = '\0';
@@ -147,6 +190,59 @@ static void beginRecording(const char* source) {
     ui::drawRec(0);
 }
 
+static void drawPetHome() {
+    ui::clearToBlack();
+    ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
+    if (g_bridgeUp) {
+        ui::drawMood(g_state);
+    } else {
+        ui::drawOffline("retrying");
+    }
+}
+
+static void returnToPet(const char* source) {
+    Serial.printf("[btn] %s -> pet\n", source);
+    ui::pageReset();
+    g_mode = Mode::IDLE;
+    g_lastPoll = 0;
+    drawPetHome();
+}
+
+static void enterVoiceIdle(const char* source) {
+    Serial.printf("[btn] %s -> voice idle (mic=%d)\n", source, audio::micActive() ? 1 : 0);
+    ui::pageReset();
+    g_mode = Mode::VOICE_IDLE;
+    ui::clearToBlack();
+    ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
+    ui::drawVoiceReady();
+}
+
+static void finishRecording(const char* source, bool buzz) {
+    Serial.printf("[btn] %s -> transcribe\n", source);
+    if (buzz) {
+        M5.Power.setVibration(120);
+        delay(80);
+        M5.Power.setVibration(0);
+    }
+    const uint8_t* wav = nullptr;
+    size_t sz = 0;
+    audio::stopRecording(&wav, &sz);
+    if (wav && sz > 44) {
+        transcribeAndShow(wav, sz);
+    } else {
+        Serial.println("[rec] nothing captured");
+        chirpFail();
+        g_mode = Mode::IDLE;
+        drawPetHome();
+    }
+}
+
+static void cancelRecording(const char* source) {
+    Serial.printf("[btn] %s -> cancel recording\n", source);
+    audio::cancelRecording();
+    returnToPet(source);
+}
+
 // POST a recorded clip and update the FSM.
 static void transcribeAndShow(const uint8_t* wav, size_t size) {
     g_mode = Mode::TRANSCRIBING;
@@ -156,9 +252,15 @@ static void transcribeAndShow(const uint8_t* wav, size_t size) {
 
     char body[1024];
     size_t bodyLen = 0;
+    Serial.printf("[transcribe:req] bytes=%u duration_ms=%u timeout_ms=%u endpoint=%s/transcribe\n",
+                  (unsigned)size,
+                  (unsigned)wavDurationMs(size),
+                  (unsigned)TRANSCRIBE_TIMEOUT_MS,
+                  PROXY_URL);
     int code = net::postTranscribe(wav, size, body, sizeof(body), &bodyLen);
-    Serial.printf("[transcribe] wav=%u code=%d bodyLen=%u\n",
+    Serial.printf("[transcribe:res] wav=%u code=%d bodyLen=%u\n",
                   (unsigned)size, code, (unsigned)bodyLen);
+    logBodyPreview(code == 200 ? "res" : "err", body, bodyLen);
 
     if (code == 200) {
         char text[512];
@@ -279,18 +381,20 @@ void loop() {
             }
         }
 
-        // Push-to-talk: press A to start recording, release to send.
-        if (g_wifiUp && g_bridgeUp && M5.BtnA.wasPressed()) {
-            beginRecording("A press");
-        }
-
-        // KEYB short -> stats view
-        if (g_bridgeUp && M5.BtnB.wasClicked()) {
-            Serial.println("[btn] B click -> stats");
+        // KEYB hold -> stats view
+        if (g_bridgeUp && btnBHold()) {
+            Serial.println("[btn] B hold -> stats");
             g_mode = Mode::STATS;
             g_statsAtMs = millis();
             ui::clearToBlack();
             ui::drawStats(g_state, WiFi.RSSI(), PROXY_URL);
+            break;
+        }
+
+        // KEYB short -> voice input mode. Recording starts only on the next B.
+        if (btnBClicked()) {
+            enterVoiceIdle("B click");
+            break;
         }
 
         // Animate the blink on the pet
@@ -309,9 +413,22 @@ void loop() {
         break;
     }
 
+    case Mode::VOICE_IDLE: {
+        if (M5.BtnA.wasClicked()) {
+            returnToPet("A click from voice");
+            break;
+        }
+
+        if (g_wifiUp && btnBClicked()) {
+            beginRecording("B click from voice");
+            break;
+        }
+        break;
+    }
+
     case Mode::STATS: {
         // KEYB short -> confirm overlay (reset prompt)
-        if (M5.BtnB.wasClicked()) {
+        if (btnBClicked()) {
             Serial.println("[btn] B click -> confirm");
             g_mode = Mode::CONFIRM;
             ui::clearToBlack();
@@ -392,35 +509,22 @@ void loop() {
             pet_sprite::drawCentered(pet_sprite::moodIndex(g_state.mood), 0);
         }
 
-        // Release -> stop and transcribe
-        if (M5.BtnA.wasReleased()) {
-            Serial.println("[btn] A release -> transcribe");
-            const uint8_t* wav = nullptr;
-            size_t sz = 0;
-            audio::stopRecording(&wav, &sz);
-            if (wav && sz > 44) {
-                transcribeAndShow(wav, sz);
-            } else {
-                Serial.println("[rec] nothing captured");
-                chirpFail();
-                g_mode = Mode::IDLE;
-            }
+        // A returns to TokenGochi without uploading an unintended clip.
+        if (M5.BtnA.wasPressed()) {
+            cancelRecording("A press while recording");
+            break;
+        }
+
+        // B completes the voice capture and sends it for transcription.
+        if (btnBClicked()) {
+            finishRecording("B click while recording", false);
+            break;
         }
 
         // Force-stop after 10s
         if (audio::elapsedSeconds() >= 10) {
             Serial.println("[rec] force-stop at 10s");
-            M5.Power.setVibration(120);
-            delay(80);
-            M5.Power.setVibration(0);
-            const uint8_t* wav = nullptr;
-            size_t sz = 0;
-            audio::stopRecording(&wav, &sz);
-            if (wav && sz > 44) {
-                transcribeAndShow(wav, sz);
-            } else {
-                g_mode = Mode::IDLE;
-            }
+            finishRecording("10s auto-stop", true);
         }
         break;
     }
@@ -432,8 +536,7 @@ void loop() {
         break;
 
     case Mode::SHOWING: {
-        // Redraw the transcript on first entry; user pages with A click,
-        // dismisses with B.
+        // Redraw the transcript on first entry. Short A pages, B dismisses.
         static bool s_drawn = false;
         if (!s_drawn) {
             ui::clearToBlack();
@@ -452,7 +555,7 @@ void loop() {
                 ui::drawTranscript(g_lastTranscript);
             }
         }
-        if (M5.BtnB.wasClicked()) {
+        if (btnBClicked()) {
             s_drawn = false;
             ui::pageReset();
             g_mode = Mode::IDLE;

@@ -252,6 +252,11 @@ function wavDurationMs(buf) {
   return null;
 }
 
+function previewText(value, maxLength = 160) {
+  const singleLine = String(value ?? "").replace(/\s+/g, " ").trim();
+  return singleLine.length > maxLength ? `${singleLine.slice(0, maxLength)}...` : singleLine;
+}
+
 // ---------------------------------------------------------------- io ---------
 async function* streamLines(file) {
   const rl = createInterface({
@@ -722,12 +727,15 @@ async function main() {
         return send(res, 200, await petState());
       }
       if (req.method === "POST" && req.url === "/transcribe") {
+        const traceId = Math.random().toString(36).slice(2, 10);
         if (!GROQ_API_KEY) {
+          console.warn(`[transcribe:${traceId}] reject reason=groq_not_configured`);
           log(503);
           return send(res, 503, { error: "groq not configured" });
         }
         const ct = (req.headers["content-type"] ?? "").toLowerCase();
         if (!ct.startsWith("audio/wav") && !ct.startsWith("application/octet-stream")) {
+          console.warn(`[transcribe:${traceId}] reject status=400 content_type=${JSON.stringify(ct)}`);
           log(400);
           return send(res, 400, { error: "expected Content-Type audio/wav or application/octet-stream" });
         }
@@ -739,10 +747,13 @@ async function main() {
           return send(res, 413, { error: String(e.message ?? e) });
         }
         if (wav.length < 44) {
+          console.warn(`[transcribe:${traceId}] reject status=400 bytes=${wav.length}`);
           log(400);
           return send(res, 400, { error: "audio body too short for WAV header" });
         }
 
+        const durationMs = wavDurationMs(wav) ?? 0;
+        console.log(`[transcribe:${traceId}] recv content_type=${JSON.stringify(ct)} bytes=${wav.length} duration_ms=${durationMs}`);
         const tGroq = Date.now();
         const boundary = "----TG" + Math.random().toString(36).slice(2);
         const body = buildMultipart(boundary, [
@@ -750,6 +761,7 @@ async function main() {
           { name: "model", value: GROQ_WHISPER_MODEL },
           { name: "response_format", value: "json" },
         ]);
+        console.log(`[transcribe:${traceId}] send groq model=${JSON.stringify(GROQ_WHISPER_MODEL)} wav_bytes=${wav.length} multipart_bytes=${body.length}`);
         const groqRes = await fetch(GROQ_URL, {
           method: "POST",
           headers: {
@@ -760,19 +772,25 @@ async function main() {
         });
         if (!groqRes.ok) {
           const errText = await groqRes.text();
-          console.error(`groq ${groqRes.status}: ${errText.slice(0, 200)}`);
+          console.error(`[transcribe:${traceId}] recv groq status=${groqRes.status} body_preview=${JSON.stringify(previewText(errText, 200))}`);
           log(502);
           return send(res, 502, { error: `groq ${groqRes.status}: ${errText.slice(0, 200)}` });
         }
         const groqJson = await groqRes.json();
         const text = groqJson.text ?? "";
+        const msGroq = Date.now() - tGroq;
+        console.log(
+          `[transcribe:${traceId}] recv groq ok text_len=${String(text).length}` +
+          ` lang=${JSON.stringify(groqJson.language ?? null)} duration_ms=${durationMs}` +
+          ` ms_groq=${msGroq} text_preview=${JSON.stringify(previewText(text))}`
+        );
         recordTranscription(text);
         log(200);
         return send(res, 200, {
           text,
-          duration_s: (wavDurationMs(wav) ?? 0) / 1000,
+          duration_s: durationMs / 1000,
           lang: groqJson.language ?? null,
-          ms_groq: Date.now() - tGroq,
+          ms_groq: msGroq,
         });
       }
       log(404);

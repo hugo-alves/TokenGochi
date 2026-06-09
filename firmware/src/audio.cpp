@@ -126,6 +126,16 @@ bool stopRecording(const uint8_t** wavOut, size_t* sizeOut) {
     return true;
 }
 
+void cancelRecording() {
+    s_recording = false;
+    if (M5.Mic.isRecording()) {
+        while (M5.Mic.isRecording() == 2) delay(5);
+    }
+    muxToSpeaker();
+    s_slotIdx = 0;
+    s_wavSize = 0;
+}
+
 void chirp(uint16_t freqHz, uint16_t ms) {
     muxToSpeaker();
     M5.Speaker.tone(freqHz, ms);

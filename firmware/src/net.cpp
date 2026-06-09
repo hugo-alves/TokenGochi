@@ -67,7 +67,7 @@ int postTranscribe(const uint8_t* wav, size_t wavSize,
     int code = http.POST((uint8_t*)wav, wavSize);
     g_lastStatus = code;
 
-    if (code == 200 && outBuf && outBufSize) {
+    if (code > 0 && outBuf && outBufSize) {
         String response = http.getString();
         size_t pos = response.length();
         if (pos > outBufSize - 1) pos = outBufSize - 1;

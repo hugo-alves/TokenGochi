@@ -88,25 +88,30 @@ When booted, the StopWatch:
 1. Connects to WiFi.
 2. Pings the bridge at `PROXY_URL` to confirm it can reach the LAN.
 3. Polls `GET /pet/state` every 30 s and renders the pet face on the round AMOLED (yellow happy / orange hungry / blue sleepy / green sick, with a 4-frame blink animation).
-4. **Hold KEYA ≥ 600 ms** to start recording from the MEMS mic. The top of the disc shows `REC` + elapsed seconds + a pulsing red bar. Recording auto-stops at 10 s.
-5. On release, the firmware muxes the captured PCM into a 16 kHz/16-bit/mono WAV, POSTs it as `audio/wav` to `PROXY_URL/transcribe`.
-6. The bridge forwards the audio to Groq Whisper and returns `{text, duration_s, lang, ms_groq}`. The firmware shows the transcript word-wrapped across pages; press A to page, B to dismiss.
-7. A short chirp plays for success, a longer low chirp for failure, plus a vibration buzz on success. A `?` icon shows when the bridge is unreachable.
-8. Tapping the bridge every 30 s in the background keeps the mood and food count fresh.
-9. On boot, if the bridge has a `last_msg` from a previous session, it's shown for 3 s as a "last heard:" greeting.
-10. **KEYB short** while idle → stats view (mood, food today, total tokens, audio runs, WiFi RSSI, bridge host).
-11. **KEYB short** while stats → confirm prompt; **KEYB short** again → cancel; **KEYA short** while confirm → POST `/pet/reset` (new birth time, clear `last_msg`, zero today's audio runs). A success chirp + buzz confirms.
+4. **KEYB short** while idle enters voice input mode without recording.
+5. **KEYB short** again starts recording from the MEMS mic. The top of the disc shows `REC` + elapsed seconds + a pulsing red bar. **KEYB short** while recording stops and sends the clip; recording also auto-stops at 10 s. **KEYA** cancels recording and returns to the pet without uploading.
+6. When recording completes, the firmware muxes the captured PCM into a 16 kHz/16-bit/mono WAV and POSTs it as `audio/wav` to `PROXY_URL/transcribe`.
+7. The bridge forwards the audio to Groq Whisper and returns `{text, duration_s, lang, ms_groq}`. The firmware shows the transcript word-wrapped across pages; press A to page, B to dismiss.
+8. A short chirp plays for success, a longer low chirp for failure, plus a vibration buzz on success. A `?` icon shows when the bridge is unreachable.
+9. Tapping the bridge every 30 s in the background keeps the mood and food count fresh.
+10. On boot, if the bridge has a `last_msg` from a previous session, it's shown for 3 s as a "last heard:" greeting.
+11. **KEYB hold** while idle → stats view (mood, food today, total tokens, audio runs, WiFi RSSI, bridge host).
+12. **KEYB short** while stats → confirm prompt; **KEYB short** again → cancel; **KEYA short** while confirm → POST `/pet/reset` (new birth time, clear `last_msg`, zero today's audio runs). A success chirp + buzz confirms.
 
 ## Buttons
 
 | button                  | state          | action                                                                 |
 |-------------------------|----------------|------------------------------------------------------------------------|
-| **KEYA hold ≥ 600 ms**  | idle / showing | start / stop recording                                                |
+| **KEYA short**          | voice          | back to idle (pet face), no recording                                |
+| **KEYA press**          | recording      | cancel recording → back to idle, no upload                           |
 | **KEYA short**          | showing        | next transcript page                                                   |
 | **KEYA short**          | confirm        | confirm reset → POST `/pet/reset`                                      |
 | **KEYA short**          | stats          | back to idle (pet face)                                                |
 | **KEYA short**          | error          | dismiss error                                                          |
-| **KEYB short**          | idle           | show stats view                                                        |
+| **KEYB short**          | idle           | enter voice input mode, no recording                                  |
+| **KEYB short**          | voice          | start recording                                                        |
+| **KEYB short**          | recording      | stop recording → POST `/transcribe`                                   |
+| **KEYB hold**           | idle           | show stats view                                                        |
 | **KEYB short**          | stats          | show confirm prompt                                                    |
 | **KEYB short**          | confirm        | cancel confirm → back to stats                                         |
 | **KEYB short**          | showing        | dismiss transcript → back to idle                                      |
@@ -116,7 +121,7 @@ When booted, the StopWatch:
 
 ```
 firmware/src/
-├── main.cpp           setup + loop, the hold-A-to-talk state machine
+├── main.cpp           setup + loop, pet/voice/stats state machine
 ├── config.h           PROXY_URL, timeouts, screen geometry (edit me)
 ├── secrets.h          gitignored, copy from secrets.h.example
 ├── audio.h / .cpp     M5.Mic slot recording, WAV mux, M5.Speaker chirps

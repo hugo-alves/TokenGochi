@@ -32,6 +32,9 @@ void drawRec(uint32_t elapsedS);
 // Shown briefly after KEYA press while the mic/codec is being armed.
 void drawArming();
 
+// Voice input idle screen. Recording has not started yet.
+void drawVoiceReady();
+
 // "thinking" overlay while the bridge is calling Groq.
 void drawThinking();
 

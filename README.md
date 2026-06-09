@@ -2,13 +2,13 @@
 
 A virtual pet for the **M5Stack StopWatch Dev Kit (ESP32-S3)** that lives on your
 Claude Code / Codex CLI token usage. Watch it get fat while you ship code, get
-sleepy when you stop, and chat back when you hold the button.
+sleepy when you stop, and chat back from a separate voice input mode.
 
 ```
          ⌚  ← the StopWatch
    🍔  ⬆ tokens  ──▶  🌕 happy / 😟 hungry / 💤 sleepy / 🤒 sick
    ⬇ text         ⬆  466x466 round AMOLED, 4 mood-sprite frames + blink
-  🌉 bridge/worker⌨  hold A to record → Whisper on Groq → text on screen
+  🌉 bridge/worker⌨  B voice mode → B record/send → Whisper on Groq → text
   ~/TokenGochi    📡  HTTPS API, fallback LAN mode available
 ```
 
@@ -135,9 +135,11 @@ pio device monitor             # optional: 115200 baud serial log
 | action                                  | how                                            |
 |-----------------------------------------|------------------------------------------------|
 | See the pet’s mood on the disc          | just look at it (polls every 30 s)             |
-| Check stats (mood / today / total / RSSI)| short-press KEYB                               |
-| Reset the pet (new birth, clear chat)   | KEYB → KEYA in the confirm overlay             |
-| Talk to your pet                        | hold KEYA ≥ 600 ms → release → wait ~1 s       |
+| Check stats (mood / today / total / RSSI)| hold KEYB                                      |
+| Reset the pet (new birth, clear chat)   | hold KEYB → KEYB → KEYA in the confirm overlay |
+| Enter voice input mode                  | short-press KEYB                               |
+| Record and send voice                   | short-press KEYB again, then KEYB to send      |
+| Cancel voice recording                  | press KEYA while recording                     |
 | Page through the transcript              | short-press KEYA while reading                  |
 | Dismiss the transcript                  | short-press KEYB                                |
 

@@ -126,7 +126,7 @@ void drawStatus(const PetState& s, bool wifiUp, bool bridgeUp) {
     if (!wifiUp) {
         snprintf(line, sizeof(line), "wifi: ?");
     } else if (!bridgeUp) {
-        snprintf(line, sizeof(line), "bridge: ?");
+        snprintf(line, sizeof(line), "api: ?");
     } else if (hasCodexAccountUsage(s)) {
         char pct[12];
         formatUsagePercent(pct, sizeof(pct), s);
@@ -181,7 +181,7 @@ void drawMood(const PetState& s) {
 }
 
 void drawOffline(const char* reason) {
-    centeredText(SCREEN_CY - 20, 4, DIM, "bridge ?");
+    centeredText(SCREEN_CY - 20, 4, DIM, "api ?");
     if (reason) {
         target().setTextSize(2);
         target().setTextColor(DIM, BG);
@@ -301,6 +301,30 @@ void drawArming() {
     flush();
 }
 
+void drawVoiceReady() {
+    target().setTextSize(3);
+    target().setTextColor(0x87F0, BG);
+    const char* label = "VOICE";
+    int w = target().textWidth(label);
+    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 66);
+    target().print(label);
+
+    target().setTextSize(2);
+    target().setTextColor(FG, BG);
+    const char* ready = "ready";
+    w = target().textWidth(ready);
+    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 20);
+    target().print(ready);
+
+    target().setTextSize(1);
+    target().setTextColor(DIM, BG);
+    const char* hint = "B: record  |  A: pet";
+    w = target().textWidth(hint);
+    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY + 34);
+    target().print(hint);
+    flush();
+}
+
 void drawRec(uint32_t elapsedS) {
     target().setTextSize(3);
     target().setTextColor(0xF800, BG);  // red
@@ -319,6 +343,13 @@ void drawRec(uint32_t elapsedS) {
     // "bar" that pulses — width based on millis
     int wBar = 100 + (millis() / 8) % 200;
     target().fillRoundRect(SCREEN_CX - wBar / 2, 360, wBar, 8, 4, 0xF800);
+
+    target().setTextSize(1);
+    target().setTextColor(DIM, BG);
+    const char* hint = "B: send  |  A: cancel";
+    w = target().textWidth(hint);
+    target().setCursor(SCREEN_CX - w / 2, SCREEN_H - 18);
+    target().print(hint);
     flush();
 }
 
@@ -383,12 +414,12 @@ void drawStats(const PetState& s, int rssi, const char* proxyUrl) {
     // Truncate URL visually by skipping the scheme
     const char* host = strstr(proxyUrl, "://");
     host = host ? host + 3 : proxyUrl;
-    snprintf(line, sizeof(line), "bridge: %s", host);
+    snprintf(line, sizeof(line), "api:    %s", host);
     w = target().textWidth(line);
     target().setCursor(SCREEN_CX - w / 2, y); target().print(line);
     y += lineH;
 
-    drawHintLine("hold B to reset  |  A: home");
+    drawHintLine("B: reset?  |  A: home");
     flush();
 }
 

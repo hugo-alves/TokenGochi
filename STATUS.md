@@ -9,6 +9,77 @@ and the 8 MB PSRAM, and tries to connect to WiFi — but the
 `Parada Clientes` AP is rejecting the association. This is a
 network-side issue, not a firmware or bridge issue.
 
+## Voice Mode Separation — `2026-06-09`
+
+Local firmware build, upload, boot, and pet-screen capture are verified. Real
+StopWatch button-transition behavior is not verified yet.
+
+Verified by code inspection and build:
+
+- Firmware state initializes in TokenGochi pet mode.
+- **KEYB short** from pet mode enters voice input mode without starting the
+  mic.
+- **KEYB short** from voice input mode starts recording.
+- **KEYA** from voice input mode returns to the pet.
+- **KEYA** while recording cancels recording and returns to the pet without
+  posting audio.
+- **KEYB short** while recording finishes capture and posts the WAV for
+  transcription.
+- **KEYB hold** from pet mode preserves access to stats/reset.
+- `cd firmware && /Users/hugoalves/Code/TokenGochi/firmware/.venv/bin/pio run`
+  passed.
+
+Verified on the connected StopWatch:
+
+- `cd firmware && /Users/hugoalves/Code/TokenGochi/firmware/.venv/bin/pio run -t upload`
+  flashed the connected StopWatch on `/dev/cu.usbmodem1101`.
+- Serial boot evidence showed the watch joined `DIGI_Z6esTz`, received
+  `192.168.1.243`, and reached the bridge with HTTP 200.
+- Screen capture
+  `screenshots/tokengochi-2026-06-09T10-10-42-482Z.png` showed the pet face
+  after the final flash and boot.
+- A 90 second serial-listener window was run for manual button-transition
+  verification, but no button-transition logs were captured during that window.
+
+Not verified yet:
+
+- Physical StopWatch button timing and debounce for short-vs-hold KEYB.
+- Device screen captures for the voice-ready, recording, stats, and transcript
+  states.
+- Serial-monitor evidence that the first KEYB press enters voice mode with
+  `mic=0` and no `/transcribe` request.
+
+## Watch State Retry Fix — `2026-06-09`
+
+The visible `bridge ? retrying` screen was diagnosed as stale firmware wording
+for backend state polling, not a voice-mode dependency. Serial evidence showed
+the watch reached `/health` successfully, then a later `/pet/state` poll failed
+with ESP HTTP `-11` (read timeout).
+
+Verified changes:
+
+- Firmware offline/status labels now say `api` instead of `bridge`.
+- Cloudflare staging `/pet/state` and `/tokens_today` no longer await a stale
+  token-source refresh before responding to the watch; they queue that refresh
+  in the Worker background and return the latest stored D1 state.
+- `cd cloudflare && npm run build` passed with the staging binding.
+- `cd cloudflare && npm run deploy:staging` deployed staging Worker version
+  `3a718bf2-9559-41e9-92ae-d356112333b9`.
+- `cd firmware && /Users/hugoalves/Code/TokenGochi/firmware/.venv/bin/pio run`
+  passed.
+- `cd firmware && /Users/hugoalves/Code/TokenGochi/firmware/.venv/bin/pio run -t upload`
+  flashed `/dev/cu.usbmodem1101`.
+- Serial monitor after the deploy and flash captured two successful state polls:
+  `food=37000` and `food=37500`.
+- Screen capture
+  `screenshots/tokengochi-2026-06-09T10-22-04-512Z.png` showed the pet screen
+  with `37.5% use`, not the retry screen.
+
+Not verified yet:
+
+- Long-run stability over multiple token-source refresh cycles.
+- Production Worker behavior; only staging was deployed.
+
 ## Codex Account Usage Migration — `2026-06-09`
 
 Implementation is deployed to staging, the VPS token source is updated, and

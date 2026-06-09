@@ -1,7 +1,7 @@
 import { isAuthorized } from "./auth.ts";
 import type { TokenSnapshot } from "./pet.ts";
 import { getPetState, getTokensToday, upsertTokenSnapshot, resetPet, recordTranscription } from "./storage.ts";
-import { transcribeAudio } from "./groq.ts";
+import { transcribeAudio, wavDurationMs } from "./groq.ts";
 
 export interface Env {
   DB: D1Database;
@@ -67,6 +67,11 @@ function tokenSourceConfigured(env: Env): boolean {
   return Boolean(env.TOKEN_SOURCE_URL && env.TOKEN_SOURCE_TOKEN);
 }
 
+function previewText(value: string, maxLength = 160): string {
+  const singleLine = value.replace(/\s+/g, " ").trim();
+  return singleLine.length > maxLength ? `${singleLine.slice(0, maxLength)}...` : singleLine;
+}
+
 async function fetchTokenSource(env: Env): Promise<TokenSnapshot> {
   if (!tokenSourceConfigured(env)) throw new Error("token source not configured");
 
@@ -118,6 +123,16 @@ async function maybeRefreshFromTokenSource(env: Env): Promise<void> {
   }
 }
 
+async function queueTokenSourceRefresh(env: Env, ctx: ExecutionContext): Promise<void> {
+  if (!tokenSourceConfigured(env)) return;
+  const current = await getTokensToday(env.DB);
+  const age = Math.floor(Date.now() / 1000) - current.ts;
+  if (age < sourceMaxAgeSeconds(env)) return;
+  ctx.waitUntil(refreshFromTokenSource(env).catch((err) => {
+    console.error(`background token source refresh failed: ${String((err as Error).message || err)}`);
+  }));
+}
+
 interface AudioReadResult {
   ok: boolean;
   body?: ArrayBuffer;
@@ -135,14 +150,14 @@ async function readAudio(req: Request): Promise<AudioReadResult> {
   return { ok: true, body };
 }
 
-async function onWatchGetState(env: Env): Promise<Response> {
-  await maybeRefreshFromTokenSource(env);
+async function onWatchGetState(env: Env, ctx: ExecutionContext): Promise<Response> {
+  await queueTokenSourceRefresh(env, ctx);
   const state = await getPetState(env.DB);
   return jsonResponse(state);
 }
 
-async function onWatchGetTokens(env: Env): Promise<Response> {
-  await maybeRefreshFromTokenSource(env);
+async function onWatchGetTokens(env: Env, ctx: ExecutionContext): Promise<Response> {
+  await queueTokenSourceRefresh(env, ctx);
   const tokens = await getTokensToday(env.DB);
   return jsonResponse(tokens);
 }
@@ -153,24 +168,45 @@ async function onWatchReset(env: Env): Promise<Response> {
 }
 
 async function onWatchTranscribe(req: Request, env: Env): Promise<Response> {
-  if (!env.GROQ_API_KEY) return jsonResponse({ error: "groq not configured" }, 503);
+  const traceId = crypto.randomUUID();
+  const contentType = req.headers.get("content-type") ?? "";
+
+  if (!env.GROQ_API_KEY) {
+    console.warn(`[transcribe:${traceId}] reject reason=groq_not_configured`);
+    return jsonResponse({ error: "groq not configured" }, 503);
+  }
+
   const wav = await readAudio(req);
   if (!wav.ok) {
     const code = wav.tooLarge ? 413 : 400;
+    console.warn(`[transcribe:${traceId}] reject status=${code} content_type=${JSON.stringify(contentType)}`);
     return jsonResponse({ error: "expected Content-Type audio/wav and body ≤1MB" }, code);
   }
+
+  const bytes = wav.body!.byteLength;
+  const durationMs = wavDurationMs(wav.body!) ?? 0;
+  const model = env.GROQ_WHISPER_MODEL || "whisper-large-v3-turbo";
+  console.log(`[transcribe:${traceId}] recv content_type=${JSON.stringify(contentType)} bytes=${bytes} duration_ms=${durationMs}`);
+  console.log(`[transcribe:${traceId}] send groq model=${JSON.stringify(model)} bytes=${bytes}`);
 
   let transcription;
   try {
     transcription = await transcribeAudio(
       env.GROQ_URL || "https://api.groq.com/openai/v1/audio/transcriptions",
       env.GROQ_API_KEY,
-      env.GROQ_WHISPER_MODEL || "whisper-large-v3-turbo",
+      model,
       wav.body!
     );
   } catch (err) {
+    console.error(`[transcribe:${traceId}] recv groq error=${JSON.stringify(String((err as Error).message || err))}`);
     return jsonResponse({ error: String((err as Error).message || "groq failure") }, 502);
   }
+
+  console.log(
+    `[transcribe:${traceId}] recv groq ok text_len=${transcription.text.length}` +
+    ` lang=${JSON.stringify(transcription.lang)} duration_ms=${transcription.durationMs}` +
+    ` ms_groq=${transcription.msGroq} text_preview=${JSON.stringify(previewText(transcription.text))}`
+  );
 
   await recordTranscription(
     env.DB,
@@ -213,7 +249,7 @@ export default {
     })());
   },
 
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const path = normalizePath(url.pathname);
     const method = request.method.toUpperCase();
@@ -243,10 +279,10 @@ export default {
     switch (path) {
       case "/tokens_today":
         if (method !== "GET") return textResponse("method not allowed", 405);
-        return onWatchGetTokens(env);
+        return onWatchGetTokens(env, ctx);
       case "/pet/state":
         if (method !== "GET") return textResponse("method not allowed", 405);
-        return onWatchGetState(env);
+        return onWatchGetState(env, ctx);
       case "/pet/reset":
         if (method !== "POST") return textResponse("method not allowed", 405);
         return onWatchReset(env);
