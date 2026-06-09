@@ -140,8 +140,11 @@ pio device monitor             # optional: 115200 baud serial log
 | Enter voice input mode                  | short-press KEYB                               |
 | Record and send voice                   | short-press KEYB again, then KEYB to send      |
 | Cancel voice recording                  | press KEYA while recording                     |
-| Page through the transcript              | short-press KEYA while reading                  |
+| Change recording duration               | hold KEYA + KEYB, then tap 10/20/30 s          |
+| Page through the transcript              | short-press KEYA or tap the screen while reading|
 | Dismiss the transcript                  | short-press KEYB                                |
+
+For a visual button/mode reference, open `docs/device-interactions.html`.
 
 ### 5. Develop / iterate
 
@@ -187,7 +190,7 @@ pio device monitor             # optional: 115200 baud serial log
 ```
 
 - **Firmware** (`firmware/`) — PlatformIO + Arduino + M5Unified. State
-  machine: `IDLE / RECORDING / TRANSCRIBING / SHOWING / STATS / CONFIRM / ERROR`.
+  machine: `IDLE / VOICE_IDLE / RECORDING / TRANSCRIBING / SHOWING / HISTORY_LIST / HISTORY_READING / STATS / CONFIRM / SETTINGS / SETTINGS_SAVED / ERROR`.
   4-sprite mood faces in `src/sprites.h` (~200 KB RGB565 in flash, PROGMEM).
 - **Bridge/token source** (`bridge/`) — Self-contained `tamagotchi-bridge.mjs`
   in LAN mode, plus `token-ingest.mjs` for push publishing and
@@ -242,12 +245,13 @@ TokenGochi/
 │   ├── platformio.ini
 │   ├── README.md
 │   └── src/
-│       ├── main.cpp                     setup + main loop, 7-state FSM
+│       ├── main.cpp                     setup + main loop, firmware FSM
 │       ├── config.h                     PROXY_URL + timeouts
 │       ├── secrets.h.example           SSID + DEVICE_TOKEN
 │       ├── audio.h / .cpp               M5.Mic record + WAV mux + M5.Speaker
 │       ├── net.h / .cpp                 HTTPClient wrappers
 │       ├── pet_state.h                  PetState struct
+│       ├── transcript_log.h / .cpp      device-only transcript history
 │       ├── pet_sprite.h / .cpp          renderer
 │       ├── ui.h / .cpp                  round-disc helpers
 │       └── sprites.h                    16 RGB565 frames (auto-generated)

@@ -35,12 +35,22 @@ void drawArming();
 // Voice input idle screen. Recording has not started yet.
 void drawVoiceReady();
 
+// Recording duration settings. Options are intentionally centered inside the
+// round display so no touch target depends on invisible corners.
+void drawDurationSettings(uint32_t selectedSeconds);
+
+// Brief confirmation after a touch selection saves the duration.
+void drawDurationSaved(uint32_t selectedSeconds);
+
 // "thinking" overlay while the bridge is calling Groq.
 void drawThinking();
 
 // Pager: render the transcript text centered, word-wrapped, on the disc.
 // `text` is NUL-terminated. Pages advance with pageNext().
-void drawTranscript(const char* text);
+void drawTranscript(const char* text, const char* title = nullptr, const char* footer = nullptr);
+
+// Device-only transcript history list. `selectedIndex` is zero-based newest-first.
+void drawHistoryList(size_t count, size_t selectedIndex, const char* meta, const char* preview);
 
 // Page the transcript forward by one screenful. Returns true if paged.
 bool pageNext();

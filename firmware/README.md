@@ -89,33 +89,48 @@ When booted, the StopWatch:
 2. Pings the bridge at `PROXY_URL` to confirm it can reach the LAN.
 3. Polls `GET /pet/state` every 30 s and renders the pet face on the round AMOLED (yellow happy / orange hungry / blue sleepy / green sick, with a 4-frame blink animation).
 4. **KEYB short** while idle enters voice input mode without recording.
-5. **KEYB short** again starts recording from the MEMS mic. The top of the disc shows `REC` + elapsed seconds + a pulsing red bar. **KEYB short** while recording stops and sends the clip; recording also auto-stops at 10 s. **KEYA** cancels recording and returns to the pet without uploading.
+5. **KEYB short** again starts recording from the MEMS mic. The top of the disc shows `REC` + elapsed seconds + a pulsing red bar. **KEYB short** while recording stops and sends the clip; recording also auto-stops at the selected duration, 10 s by default. **KEYA** cancels recording and returns to the pet without uploading.
 6. When recording completes, the firmware muxes the captured PCM into a 16 kHz/16-bit/mono WAV and POSTs it as `audio/wav` to `PROXY_URL/transcribe`.
-7. The bridge forwards the audio to Groq Whisper and returns `{text, duration_s, lang, ms_groq}`. The firmware shows the transcript word-wrapped across pages; press A to page, B to dismiss.
+7. The bridge forwards the audio to Groq Whisper and returns `{text, duration_s, lang, ms_groq}`. The firmware stores successful transcripts on the device only for 7 days, capped at 30 entries, then shows the latest transcript word-wrapped across pages; press A or tap the screen to page, B to dismiss.
 8. A short chirp plays for success, a longer low chirp for failure, plus a vibration buzz on success. A `?` icon shows when the bridge is unreachable.
 9. Tapping the bridge every 30 s in the background keeps the mood and food count fresh.
 10. On boot, if the bridge has a `last_msg` from a previous session, it's shown for 3 s as a "last heard:" greeting.
 11. **KEYB hold** while idle → stats view (mood, food today, total tokens, audio runs, WiFi RSSI, bridge host).
 12. **KEYB short** while stats → confirm prompt; **KEYB short** again → cancel; **KEYA short** while confirm → POST `/pet/reset` (new birth time, clear `last_msg`, zero today's audio runs). A success chirp + buzz confirms.
+13. **KEYA + KEYB hold** from pet, voice idle, or stats opens recording-duration settings. Tap 10/20/30 seconds directly, then the watch shows a brief saved confirmation before returning to the pet. Use **KEYB short** to cycle and **KEYA short** to return to the pet.
+14. **KEYA short** from the pet opens device-only transcript history. Use **KEYB short** to move older, **KEYA short** to open the selected transcript, **KEYB short** inside a transcript to return to the list, and **KEYB hold** from the list to return to the pet.
 
 ## Buttons
 
 | button                  | state          | action                                                                 |
 |-------------------------|----------------|------------------------------------------------------------------------|
 | **KEYA short**          | voice          | back to idle (pet face), no recording                                |
+| **KEYA short**          | idle           | open device-only transcript history                                  |
 | **KEYA press**          | recording      | cancel recording → back to idle, no upload                           |
 | **KEYA short**          | showing        | next transcript page                                                   |
+| **KEYA short**          | history list   | open selected history entry                                            |
+| **KEYA short**          | history entry  | next transcript page                                                   |
 | **KEYA short**          | confirm        | confirm reset → POST `/pet/reset`                                      |
+| **KEYA short**          | settings       | back to idle (pet face)                                                |
 | **KEYA short**          | stats          | back to idle (pet face)                                                |
 | **KEYA short**          | error          | dismiss error                                                          |
+| **KEYA + KEYB hold**    | idle/voice/stats | open recording-duration settings                                     |
 | **KEYB short**          | idle           | enter voice input mode, no recording                                  |
 | **KEYB short**          | voice          | start recording                                                        |
 | **KEYB short**          | recording      | stop recording → POST `/transcribe`                                   |
 | **KEYB hold**           | idle           | show stats view                                                        |
+| **KEYB short**          | settings       | cycle recording duration: 10 s → 20 s → 30 s                           |
 | **KEYB short**          | stats          | show confirm prompt                                                    |
 | **KEYB short**          | confirm        | cancel confirm → back to stats                                         |
 | **KEYB short**          | showing        | dismiss transcript → back to idle                                      |
+| **KEYB short**          | history list   | cycle to the next older entry                                          |
+| **KEYB hold**           | history list   | back to idle (pet face)                                                |
+| **KEYB short**          | history entry  | back to history list                                                   |
 | **KEYB short**          | error          | dismiss error                                                          |
+| **touch tap**           | settings       | select tapped duration → show saved confirmation → back to idle         |
+| **touch tap**           | showing        | next transcript page                                                   |
+| **touch tap**           | history list   | open selected history entry                                            |
+| **touch tap**           | history entry  | next transcript page                                                   |
 
 ## File map
 
@@ -127,6 +142,7 @@ firmware/src/
 ├── audio.h / .cpp     M5.Mic slot recording, WAV mux, M5.Speaker chirps
 ├── net.h / .cpp       HTTPClient wrappers, /pet/state GET, /transcribe POST
 ├── pet_state.h        PetState struct
+├── transcript_log.h/.cpp device-only transcript ring log, 7-day retention
 ├── pet_sprite.h/.cpp  sprite renderer (mood ↔ index, blink tick, drawCentered)
 ├── ui.h / .cpp        round-disc display helpers (status, mood, REC, transcript)
 └── sprites.h          16× 80×80 RGB565 faces, auto-generated by tools/generate-sprites.mjs

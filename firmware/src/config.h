@@ -19,6 +19,22 @@
 #define TRANSCRIBE_TIMEOUT_MS 30000  // Cloudflare -> Groq can take a few seconds
 #endif
 
+#ifndef TRANSCRIPT_LOG_RETENTION_DAYS
+#define TRANSCRIPT_LOG_RETENTION_DAYS 7
+#endif
+
+#ifndef TRANSCRIPT_LOG_MAX_ENTRIES
+#define TRANSCRIPT_LOG_MAX_ENTRIES 30
+#endif
+
+#ifndef TRANSCRIPT_LOG_TEXT_BYTES
+#define TRANSCRIPT_LOG_TEXT_BYTES 512
+#endif
+
+#ifndef TRANSCRIPT_LOG_LANG_BYTES
+#define TRANSCRIPT_LOG_LANG_BYTES 12
+#endif
+
 // Round AMOLED is 466x466 with a ~233 px visible radius. We clip drawing
 // to the inscribed circle so nothing leaks into the chassis corners.
 #define SCREEN_W      466

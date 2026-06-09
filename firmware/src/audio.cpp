@@ -9,6 +9,7 @@ namespace audio {
 static int16_t* s_pcm = nullptr;
 static uint32_t s_slotIdx = 0;
 static uint32_t s_startMs = 0;
+static uint32_t s_maxSeconds = DEFAULT_SECONDS;
 static bool s_recording = false;
 static bool s_micActive = false;
 static CaptureStats s_lastStats = {};
@@ -20,6 +21,16 @@ static size_t   s_wavSize = 0;
 static void writeLe16(uint8_t* p, int16_t v) { p[0] = v & 0xFF; p[1] = (v >> 8) & 0xFF; }
 static void writeLe32(uint8_t* p, int32_t v) {
     p[0] = v & 0xFF; p[1] = (v >> 8) & 0xFF; p[2] = (v >> 16) & 0xFF; p[3] = (v >> 24) & 0xFF;
+}
+
+static uint32_t clampSeconds(uint32_t seconds) {
+    if (seconds <= 10) return 10;
+    if (seconds <= 20) return 20;
+    return 30;
+}
+
+static uint32_t maxSlots() {
+    return SLOTS_PER_SECOND * s_maxSeconds;
 }
 
 static void updateStats(size_t totalSamples) {
@@ -94,7 +105,8 @@ void init() {
     M5.Speaker.begin();
 }
 
-void startRecording() {
+void startRecording(uint32_t maxSeconds) {
+    s_maxSeconds = clampSeconds(maxSeconds);
     s_slotIdx = 0;
     s_startMs = millis();
     s_wavSize = 0;
@@ -105,7 +117,8 @@ void startRecording() {
 int pumpRecording() {
     if (!s_recording || !s_micActive) return 0;
     int queued = 0;
-    while (s_slotIdx < MAX_SLOTS && M5.Mic.isRecording() < 2) {
+    const uint32_t slotLimit = maxSlots();
+    while (s_slotIdx < slotLimit && M5.Mic.isRecording() < 2) {
         int16_t* slot = s_pcm + s_slotIdx * SLOT_SAMPLES;
         if (!M5.Mic.record(slot, SLOT_SAMPLES, SAMPLE_RATE)) break;
         s_slotIdx++;
@@ -117,6 +130,15 @@ int pumpRecording() {
 uint32_t elapsedSeconds() {
     if (!s_recording) return 0;
     return (millis() - s_startMs) / 1000;
+}
+
+uint32_t elapsedMillis() {
+    if (!s_recording) return 0;
+    return millis() - s_startMs;
+}
+
+uint32_t maxDurationSeconds() {
+    return s_maxSeconds;
 }
 
 bool stopRecording(const uint8_t** wavOut, size_t* sizeOut) {

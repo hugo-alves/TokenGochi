@@ -2,6 +2,7 @@
 #include "pet_sprite.h"
 #include "sprites.h"
 #include <M5Unified.h>
+#include <math.h>
 
 namespace ui {
 
@@ -197,14 +198,121 @@ static const char*  s_pageText = nullptr;
 static size_t       s_pageStart = 0;
 static size_t       s_pageLen = 0;
 static bool         s_showingTranscript = false;
-static char         s_ownedText[512];   // copy of the current transcript
+static char         s_ownedText[TRANSCRIPT_LOG_TEXT_BYTES];   // copy of the current transcript
+static char         s_pageTitle[32];
+static char         s_pageFooter[32];
+static size_t       s_pageStarts[12];
 static int          s_pageIndex = 0;
 static int          s_pageCount = 0;
 
-// Compute line widths for the current font/size and word-wrap.
-static int maxCharsPerLine() { return 18; }   // empirical for size 2
-static int maxLinesOnScreen() { return 10; }  // empirical
-static int charsPerPage() { return maxCharsPerLine() * maxLinesOnScreen(); }
+static constexpr int TRANSCRIPT_LINE_H = 24;
+static constexpr int TRANSCRIPT_SIDE_PAD = 20;
+static constexpr int TRANSCRIPT_BOTTOM_Y = SCREEN_H - 46;
+
+static int transcriptTopY() {
+    return s_pageTitle[0] ? 66 : 54;
+}
+
+static int chordWidthAtY(int y) {
+    const float sampleY = (float)y + (float)TRANSCRIPT_LINE_H * 0.5f;
+    const float dy = sampleY - (float)SCREEN_CY;
+    const float r = (float)SCREEN_R;
+    float half = 0.0f;
+    if (fabsf(dy) < r) {
+        half = sqrtf(r * r - dy * dy);
+    }
+    int width = (int)(half * 2.0f) - TRANSCRIPT_SIDE_PAD * 2;
+    if (width < 132) width = 132;
+    if (width > SCREEN_W - TRANSCRIPT_SIDE_PAD * 2) {
+        width = SCREEN_W - TRANSCRIPT_SIDE_PAD * 2;
+    }
+    return width;
+}
+
+static int maxCharsForY(int y) {
+    target().setTextSize(2);
+    int charW = target().textWidth("M");
+    if (charW <= 0) charW = 12;
+    int chars = chordWidthAtY(y) / charW;
+    if (chars < 10) chars = 10;
+    if (chars > 60) chars = 60;
+    return chars;
+}
+
+static size_t skipLeadingSpaces(size_t pos) {
+    while (pos < s_pageLen && (s_ownedText[pos] == ' ' || s_ownedText[pos] == '\t')) {
+        ++pos;
+    }
+    return pos;
+}
+
+static size_t wrappedLineEnd(size_t pos, int maxChars) {
+    pos = skipLeadingSpaces(pos);
+    if (pos >= s_pageLen) return pos;
+
+    size_t end = pos;
+    size_t lastBreak = 0;
+    int chars = 0;
+    while (end < s_pageLen && chars < maxChars) {
+        const char c = s_ownedText[end];
+        if (c == '\n' || c == '\r') return end + 1;
+        ++end;
+        ++chars;
+        if (c == ' ' || c == '-' || c == ',' || c == '.' || c == ';' || c == ':') {
+            lastBreak = end;
+        }
+    }
+    if (end < s_pageLen &&
+        s_ownedText[end] != ' ' &&
+        s_ownedText[end] != '\n' &&
+        s_ownedText[end] != '\r' &&
+        lastBreak > pos) {
+        return lastBreak;
+    }
+    return end > pos ? end : pos + 1;
+}
+
+static void copyLine(size_t start, size_t end, char* out, size_t outSize) {
+    start = skipLeadingSpaces(start);
+    while (end > start &&
+           (s_ownedText[end - 1] == ' ' ||
+            s_ownedText[end - 1] == '\t' ||
+            s_ownedText[end - 1] == '\n' ||
+            s_ownedText[end - 1] == '\r')) {
+        --end;
+    }
+
+    size_t n = end > start ? end - start : 0;
+    if (n >= outSize) n = outSize - 1;
+    for (size_t i = 0; i < n; ++i) {
+        char c = s_ownedText[start + i];
+        out[i] = (c == '\n' || c == '\r') ? ' ' : c;
+    }
+    out[n] = '\0';
+}
+
+static void layoutTranscriptPages() {
+    s_pageCount = 0;
+    s_pageStart = 0;
+    if (s_pageLen == 0) return;
+
+    size_t pos = 0;
+    while (pos < s_pageLen && s_pageCount < (int)(sizeof(s_pageStarts) / sizeof(s_pageStarts[0]))) {
+        s_pageStarts[s_pageCount++] = pos;
+        int y = transcriptTopY();
+        while (pos < s_pageLen && y <= TRANSCRIPT_BOTTOM_Y) {
+            size_t next = wrappedLineEnd(pos, maxCharsForY(y));
+            if (next <= pos) next = pos + 1;
+            pos = next;
+            y += TRANSCRIPT_LINE_H;
+        }
+    }
+
+    if (s_pageCount == 0) {
+        s_pageStarts[0] = 0;
+        s_pageCount = 1;
+    }
+}
 
 void pageReset() {
     s_pageIndex = 0;
@@ -213,7 +321,60 @@ void pageReset() {
     s_pageText = nullptr;
     s_showingTranscript = false;
     s_ownedText[0] = '\0';
+    s_pageTitle[0] = '\0';
+    s_pageFooter[0] = '\0';
     s_pageCount = 0;
+}
+
+static void renderTranscriptPage() {
+    if (!s_showingTranscript || !s_pageText) return;
+
+    target().setTextSize(2);
+    target().setTextColor(FG, BG);
+
+    if (s_pageTitle[0]) {
+        target().setTextSize(1);
+        target().setTextColor(DIM, BG);
+        int w = target().textWidth(s_pageTitle);
+        target().setCursor(SCREEN_CX - w / 2, 46);
+        target().print(s_pageTitle);
+        target().setTextSize(2);
+        target().setTextColor(FG, BG);
+    }
+
+    const size_t pageEnd = (s_pageIndex + 1 < s_pageCount)
+        ? s_pageStarts[s_pageIndex + 1]
+        : s_pageLen;
+    size_t pos = s_pageStarts[s_pageIndex];
+    int y = transcriptTopY();
+    while (pos < pageEnd && y <= TRANSCRIPT_BOTTOM_Y) {
+        size_t end = wrappedLineEnd(pos, maxCharsForY(y));
+        if (end > pageEnd) end = pageEnd;
+        char line[80] = {0};
+        copyLine(pos, end, line, sizeof(line));
+        if (line[0]) {
+            const int w = target().textWidth(line);
+            target().setCursor(SCREEN_CX - w / 2, y);
+            target().print(line);
+        }
+        pos = end > pos ? end : pos + 1;
+        y += TRANSCRIPT_LINE_H;
+    }
+
+    target().setTextSize(1);
+    target().setTextColor(DIM, BG);
+    char hint[40];
+    if (s_pageFooter[0]) {
+        snprintf(hint, sizeof(hint), "%s", s_pageFooter);
+    } else if (s_pageCount > 1) {
+        snprintf(hint, sizeof(hint), "%d/%d  A/tap  B", s_pageIndex + 1, s_pageCount);
+    } else {
+        snprintf(hint, sizeof(hint), "B: done");
+    }
+    int w = target().textWidth(hint);
+    target().setCursor(SCREEN_CX - w / 2, SCREEN_H - 24);
+    target().print(hint);
+    flush();
 }
 
 bool pageNext() {
@@ -223,70 +384,116 @@ bool pageNext() {
         // wrap back to the start
         s_pageIndex = 0;
     }
-    s_pageStart = s_pageIndex * charsPerPage();
+    s_pageStart = s_pageStarts[s_pageIndex];
     return true;
 }
 
 bool showingTranscript() { return s_showingTranscript; }
 
-void drawTranscript(const char* text) {
-    pageReset();
-    if (!text || !*text) return;
+void drawTranscript(const char* text, const char* title, const char* footer) {
+    if (!text || !*text) {
+        pageReset();
+        return;
+    }
 
+    const char* nextTitle = title ? title : "";
+    const char* nextFooter = footer ? footer : "";
+    if (s_showingTranscript &&
+        strncmp(s_ownedText, text, sizeof(s_ownedText)) == 0 &&
+        strncmp(s_pageTitle, nextTitle, sizeof(s_pageTitle)) == 0 &&
+        strncmp(s_pageFooter, nextFooter, sizeof(s_pageFooter)) == 0) {
+        renderTranscriptPage();
+        return;
+    }
+
+    pageReset();
     strncpy(s_ownedText, text, sizeof(s_ownedText) - 1);
     s_ownedText[sizeof(s_ownedText) - 1] = '\0';
+    strncpy(s_pageTitle, nextTitle, sizeof(s_pageTitle) - 1);
+    s_pageTitle[sizeof(s_pageTitle) - 1] = '\0';
+    strncpy(s_pageFooter, nextFooter, sizeof(s_pageFooter) - 1);
+    s_pageFooter[sizeof(s_pageFooter) - 1] = '\0';
     s_pageText = s_ownedText;
     s_pageLen = strlen(s_ownedText);
-    s_pageCount = (s_pageLen + charsPerPage() - 1) / charsPerPage();
+    layoutTranscriptPages();
     s_pageIndex = 0;
-    s_pageStart = 0;
+    s_pageStart = s_pageStarts[0];
     s_showingTranscript = true;
 
-    // Render this page
+    renderTranscriptPage();
+}
+
+void drawHistoryList(size_t count, size_t selectedIndex, const char* meta, const char* preview) {
+    target().setTextSize(3);
+    target().setTextColor(0x87F0, BG);
+    const char* title = "HISTORY";
+    int w = target().textWidth(title);
+    target().setCursor(SCREEN_CX - w / 2, 52);
+    target().print(title);
+
+    if (count == 0) {
+        target().setTextSize(2);
+        target().setTextColor(DIM, BG);
+        const char* empty = "no transcripts";
+        w = target().textWidth(empty);
+        target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 12);
+        target().print(empty);
+        drawHintLine("A: pet");
+        flush();
+        return;
+    }
+
+    char pos[24];
+    snprintf(pos, sizeof(pos), "%u/%u", (unsigned)(selectedIndex + 1), (unsigned)count);
     target().setTextSize(2);
     target().setTextColor(FG, BG);
-    const int lineH = 22;  // approx line height for size 2
-    const int topY  = 36;
+    w = target().textWidth(pos);
+    target().setCursor(SCREEN_CX - w / 2, 104);
+    target().print(pos);
 
-    int cx = SCREEN_CX, cy = SCREEN_CY;
-    // Word-wrap: for each line, take up to maxCharsPerLine chars ending at
-    // a space, otherwise break mid-word.
-    size_t pos = s_pageStart;
-    int y = topY;
-    while (pos < s_pageLen && y < SCREEN_H - 20) {
-        size_t end = pos;
-        int charsThisLine = 0;
-        size_t lastSpace = pos;
-        while (end < s_pageLen && charsThisLine < maxCharsPerLine()) {
-            char c = s_ownedText[end];
-            end++;
-            charsThisLine++;
+    if (meta && *meta) {
+        target().setTextSize(1);
+        target().setTextColor(DIM, BG);
+        w = target().textWidth(meta);
+        target().setCursor(SCREEN_CX - w / 2, 132);
+        target().print(meta);
+    }
+
+    target().setTextSize(2);
+    target().setTextColor(FG, BG);
+    const char* text = preview ? preview : "";
+    size_t len = strlen(text);
+    size_t posText = 0;
+    int y = 174;
+    while (posText < len && y <= 320) {
+        const int maxChars = maxCharsForY(y);
+        size_t end = posText;
+        size_t lastSpace = 0;
+        int chars = 0;
+        while (end < len && chars < maxChars) {
+            char c = text[end];
+            if (c == '\n' || c == '\r') break;
+            ++end;
+            ++chars;
             if (c == ' ') lastSpace = end;
         }
-        if (end < s_pageLen && s_ownedText[end] != ' ' && lastSpace > pos) {
+        if (end < len && text[end] != ' ' && lastSpace > posText) {
             end = lastSpace;
         }
-        char line[40] = {0};
-        size_t n = end - pos;
+        while (posText < end && text[posText] == ' ') ++posText;
+        char line[80] = {0};
+        size_t n = end > posText ? end - posText : 0;
         if (n >= sizeof(line)) n = sizeof(line) - 1;
-        memcpy(line, s_ownedText + pos, n);
+        memcpy(line, text + posText, n);
         line[n] = '\0';
-        // crude centering-ish: just left-aligned
-        target().setCursor(SCREEN_CX - maxCharsPerLine() * 12 / 2, y);
+        w = target().textWidth(line);
+        target().setCursor(SCREEN_CX - w / 2, y);
         target().print(line);
-        pos = end;
-        y += lineH;
+        posText = end > posText ? end : posText + 1;
+        y += TRANSCRIPT_LINE_H;
     }
 
-    // Page indicator at the bottom
-    if (s_pageCount > 1) {
-        char hint[16];
-        snprintf(hint, sizeof(hint), "%d/%d", s_pageIndex + 1, s_pageCount);
-        int w = target().textWidth(hint);
-        target().setTextColor(DIM, BG);
-        target().setCursor(SCREEN_CX - w / 2, SCREEN_H - 24);
-        target().print(hint);
-    }
+    drawHintLine("A open  |  B older");
     flush();
 }
 
@@ -322,6 +529,72 @@ void drawVoiceReady() {
     w = target().textWidth(hint);
     target().setCursor(SCREEN_CX - w / 2, SCREEN_CY + 34);
     target().print(hint);
+    flush();
+}
+
+void drawDurationSettings(uint32_t selectedSeconds) {
+    target().setTextSize(3);
+    target().setTextColor(0x87F0, BG);
+    const char* title = "VOICE";
+    int w = target().textWidth(title);
+    target().setCursor(SCREEN_CX - w / 2, 46);
+    target().print(title);
+
+    target().setTextSize(2);
+    target().setTextColor(FG, BG);
+    const char* subtitle = "recording length";
+    w = target().textWidth(subtitle);
+    target().setCursor(SCREEN_CX - w / 2, 90);
+    target().print(subtitle);
+
+    static constexpr uint32_t OPTIONS[] = {10, 20, 30};
+    static constexpr int BOX_W = 220;
+    static constexpr int BOX_H = 54;
+    static constexpr int BOX_X = SCREEN_CX - BOX_W / 2;
+    static constexpr int BOX_Y[] = {142, 214, 286};
+
+    for (size_t i = 0; i < sizeof(OPTIONS) / sizeof(OPTIONS[0]); ++i) {
+        const bool selected = selectedSeconds == OPTIONS[i];
+        const uint16_t border = selected ? 0x07E0 : DIM;
+        const uint16_t fill = selected ? 0x0340 : BG;
+        target().fillRoundRect(BOX_X, BOX_Y[i], BOX_W, BOX_H, 8, fill);
+        target().drawRoundRect(BOX_X, BOX_Y[i], BOX_W, BOX_H, 8, border);
+
+        char label[16];
+        snprintf(label, sizeof(label), "%lu sec", (unsigned long)OPTIONS[i]);
+        target().setTextSize(2);
+        target().setTextColor(selected ? 0x07E0 : FG, fill);
+        w = target().textWidth(label);
+        target().setCursor(SCREEN_CX - w / 2, BOX_Y[i] + 17);
+        target().print(label);
+    }
+
+    drawHintLine("tap option  |  B cycle  |  A pet");
+    flush();
+}
+
+void drawDurationSaved(uint32_t selectedSeconds) {
+    target().setTextSize(2);
+    target().setTextColor(DIM, BG);
+    const char* saved = "recording length";
+    int w = target().textWidth(saved);
+    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 70);
+    target().print(saved);
+
+    target().setTextSize(4);
+    target().setTextColor(0x07E0, BG);
+    char label[16];
+    snprintf(label, sizeof(label), "%lus", (unsigned long)selectedSeconds);
+    w = target().textWidth(label);
+    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 22);
+    target().print(label);
+
+    target().setTextSize(2);
+    target().setTextColor(FG, BG);
+    const char* ok = "saved";
+    w = target().textWidth(ok);
+    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY + 34);
+    target().print(ok);
     flush();
 }
 

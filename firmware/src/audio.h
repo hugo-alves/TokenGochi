@@ -17,8 +17,10 @@ namespace audio {
 
 constexpr int    SAMPLE_RATE   = 16000;       // Hz
 constexpr int    SLOT_SAMPLES  = 800;          // 50 ms; tolerates display redraw latency
-constexpr int    MAX_SECONDS   = 10;
-constexpr int    MAX_SLOTS     = SAMPLE_RATE / SLOT_SAMPLES * MAX_SECONDS;  // 800
+constexpr int    DEFAULT_SECONDS = 10;
+constexpr int    MAX_SECONDS   = 30;
+constexpr int    SLOTS_PER_SECOND = SAMPLE_RATE / SLOT_SAMPLES;
+constexpr int    MAX_SLOTS     = SLOTS_PER_SECOND * MAX_SECONDS;
 constexpr int    TOTAL_SAMPLES = SLOT_SAMPLES * MAX_SLOTS;
 constexpr size_t WAV_HEADER    = 44;
 constexpr size_t MAX_WAV_BYTES = WAV_HEADER + TOTAL_SAMPLES * 2;
@@ -38,7 +40,8 @@ struct CaptureStats {
 void init();
 
 // Begin recording. Ends the speaker if it was active. Cheap to call repeatedly.
-void startRecording();
+// maxSeconds is clamped to the supported device settings range.
+void startRecording(uint32_t maxSeconds = DEFAULT_SECONDS);
 
 // Try to advance the recorder by one slot. Returns:
 //   1 = a new slot was queued
@@ -48,6 +51,12 @@ int pumpRecording();
 
 // Seconds elapsed since startRecording() (0 if not recording).
 uint32_t elapsedSeconds();
+
+// Milliseconds elapsed since startRecording() (0 if not recording).
+uint32_t elapsedMillis();
+
+// Current runtime capture cap.
+uint32_t maxDurationSeconds();
 
 // Stop recording, free the mic, and emit a WAV buffer (header + PCM).
 // Returns false if nothing was recorded. *wavOut and *sizeOut are valid

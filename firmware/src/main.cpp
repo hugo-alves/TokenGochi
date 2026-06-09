@@ -8,6 +8,7 @@
 #include "ui.h"
 #include "pet_sprite.h"
 #include "audio.h"
+#include "transcript_log.h"
 
 #include <ArduinoJson.h>
 
@@ -18,24 +19,50 @@ static bool         g_bridgeUp   = false;
 static uint32_t     g_lastPoll   = 0;
 static uint32_t     g_lastRecon  = 0;
 static uint32_t     g_lastRecRedraw = 0;
+static uint32_t     g_recordSeconds = audio::DEFAULT_SECONDS;
+static uint32_t     g_clockEpochSec = 0;
+static uint32_t     g_clockSyncedAtMs = 0;
+static size_t       g_historyIndex = 0;
 
-enum class Mode : uint8_t { IDLE, VOICE_IDLE, RECORDING, TRANSCRIBING, SHOWING, STATS, CONFIRM, ERROR };
+enum class Mode : uint8_t { IDLE, VOICE_IDLE, RECORDING, TRANSCRIBING, SHOWING, HISTORY_LIST, HISTORY_READING, STATS, CONFIRM, SETTINGS, SETTINGS_SAVED, ERROR };
 static Mode         g_mode = Mode::IDLE;
-static char         g_lastTranscript[512];
+static char         g_lastTranscript[TRANSCRIPT_LOG_TEXT_BYTES];
+static char         g_transcriptTitle[32];
+static char         g_transcriptFooter[40];
 static char         g_lastError[64];
 static uint32_t     g_errorAtMs = 0;
 static uint32_t     g_statsAtMs = 0;       // when stats view opened
+static uint32_t     g_settingsAtMs = 0;
+static uint32_t     g_settingsSavedUntilMs = 0;
 static uint32_t     g_greetingUntilMs = 0; // hide greeting after this
 static bool         g_greetOnFirstPoll = true;
-static bool         g_suppressBClickUntilRelease = false;
+static bool         g_suppressButtonsUntilRelease = false;
+static uint32_t     g_suppressButtonsUntilMs = 0;
+static uint32_t     g_abHoldStartMs = 0;
 
 static constexpr uint32_t ERROR_HOLD_MS  = 3000; // show error then return
 static constexpr uint32_t STATS_TIMEOUT_MS = 8000; // auto-dismiss stats view
 static constexpr uint32_t CONFIRM_TIMEOUT_MS = 5000;
+static constexpr uint32_t SETTINGS_TIMEOUT_MS = 15000;
+static constexpr uint32_t SETTINGS_SAVED_MS = 900;
+static constexpr uint32_t SETTINGS_CHORD_MS = 1200;
 static constexpr uint32_t GREETING_HOLD_MS = 3000;
 
 // --- helpers ---------------------------------------------------------------
 static void transcribeAndShow(const uint8_t* wav, size_t size);
+static void returnToPet(const char* source);
+
+static uint32_t currentEpochSec() {
+    if (g_clockEpochSec == 0) return 0;
+    return g_clockEpochSec + (millis() - g_clockSyncedAtMs) / 1000UL;
+}
+
+static void syncClock(uint32_t epochSec) {
+    if (epochSec < 1600000000UL) return;
+    g_clockEpochSec = epochSec;
+    g_clockSyncedAtMs = millis();
+    transcript_log::prune(currentEpochSec());
+}
 
 static uint32_t wavDurationMs(size_t wavSize) {
     if (wavSize <= 44) return 0;
@@ -146,42 +173,296 @@ static void connectWifi() {
 static void chirpOk()   { audio::chirp(1200, 80); }
 static void chirpFail() { audio::chirp(400, 200); }
 
-static bool btnBClicked() {
-    if (g_suppressBClickUntilRelease) {
-        if (!M5.BtnB.isPressed()) {
-            g_suppressBClickUntilRelease = false;
+static bool buttonsSuppressed() {
+    if (g_suppressButtonsUntilRelease) {
+        if (!M5.BtnA.isPressed() && !M5.BtnB.isPressed()) {
+            g_suppressButtonsUntilRelease = false;
+            g_suppressButtonsUntilMs = millis() + 80;
         }
-        return false;
+        return true;
     }
+    return millis() < g_suppressButtonsUntilMs;
+}
+
+static bool btnAClicked() {
+    if (buttonsSuppressed()) return false;
+    return M5.BtnA.wasClicked();
+}
+
+static bool btnBClicked() {
+    if (buttonsSuppressed()) return false;
     return M5.BtnB.wasClicked();
 }
 
 static bool btnBHold() {
+    if (buttonsSuppressed()) return false;
     if (M5.BtnB.wasHold()) {
-        g_suppressBClickUntilRelease = true;
+        g_suppressButtonsUntilRelease = true;
         return true;
     }
     return false;
 }
 
-// Pull the "text" field out of a JSON response like `{"text": "...", ...}`.
-static void extractTranscript(const char* json, char* out, size_t outSize) {
+static bool settingsEntryAllowed() {
+    return g_mode == Mode::IDLE || g_mode == Mode::VOICE_IDLE || g_mode == Mode::STATS;
+}
+
+static uint32_t clampRecordSeconds(uint32_t seconds) {
+    if (seconds <= 10) return 10;
+    if (seconds <= 20) return 20;
+    return 30;
+}
+
+static void drawSettings() {
+    ui::clearToBlack();
+    ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
+    ui::drawDurationSettings(g_recordSeconds);
+}
+
+static void setRecordSeconds(uint32_t seconds, const char* source) {
+    g_recordSeconds = clampRecordSeconds(seconds);
+    Serial.printf("[settings] recording_duration=%lus source=%s\n",
+                  (unsigned long)g_recordSeconds,
+                  source);
+}
+
+static void showDurationSaved(const char* source) {
+    Serial.printf("[settings] saved recording_duration=%lus source=%s\n",
+                  (unsigned long)g_recordSeconds,
+                  source);
+    ui::clearToBlack();
+    ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
+    ui::drawDurationSaved(g_recordSeconds);
+    g_mode = Mode::SETTINGS_SAVED;
+    g_settingsSavedUntilMs = millis() + SETTINGS_SAVED_MS;
+}
+
+static void enterDurationSettings(const char* source) {
+    Serial.printf("[btn] %s -> settings (recording_duration=%lus)\n",
+                  source,
+                  (unsigned long)g_recordSeconds);
+    ui::pageReset();
+    g_mode = Mode::SETTINGS;
+    g_settingsAtMs = millis();
+    drawSettings();
+}
+
+static bool handleSettingsChord() {
+    if (!settingsEntryAllowed()) {
+        g_abHoldStartMs = 0;
+        return false;
+    }
+
+    const bool bothPressed = M5.BtnA.isPressed() && M5.BtnB.isPressed();
+    if (!bothPressed) {
+        g_abHoldStartMs = 0;
+        return false;
+    }
+
+    if (g_abHoldStartMs == 0) {
+        g_abHoldStartMs = millis();
+    }
+
+    if (millis() - g_abHoldStartMs >= SETTINGS_CHORD_MS) {
+        g_abHoldStartMs = 0;
+        g_suppressButtonsUntilRelease = true;
+        enterDurationSettings("A+B hold");
+    }
+
+    return true;
+}
+
+static bool touchClicked(int16_t* x, int16_t* y) {
+    if (!M5.Touch.isEnabled()) return false;
+    const int count = M5.Touch.getCount();
+    for (int i = 0; i < count; ++i) {
+        auto detail = M5.Touch.getDetail(i);
+        if (detail.wasClicked()) {
+            *x = detail.x;
+            *y = detail.y;
+            return true;
+        }
+    }
+    return false;
+}
+
+static uint32_t durationFromTouch(int16_t x, int16_t y) {
+    static constexpr int BOX_W = 220;
+    static constexpr int BOX_H = 54;
+    static constexpr int BOX_X = SCREEN_CX - BOX_W / 2;
+    static constexpr int BOX_Y[] = {142, 214, 286};
+    static constexpr uint32_t OPTIONS[] = {10, 20, 30};
+
+    if (x < BOX_X || x > BOX_X + BOX_W) return 0;
+    for (size_t i = 0; i < sizeof(OPTIONS) / sizeof(OPTIONS[0]); ++i) {
+        if (y >= BOX_Y[i] && y <= BOX_Y[i] + BOX_H) {
+            return OPTIONS[i];
+        }
+    }
+    return 0;
+}
+
+static void pageTranscript(const char* source) {
+    Serial.printf("[transcript] next page source=%s\n", source);
+    ui::clearToBlack();
+    ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
+    ui::pageNext();
+    ui::drawTranscript(g_lastTranscript, g_transcriptTitle, g_transcriptFooter);
+}
+
+static void formatHistoryAge(const transcript_log::Entry& entry, char* out, size_t outSize) {
+    uint32_t nowSec = currentEpochSec();
+    if (entry.createdAtSec > 0 && nowSec >= entry.createdAtSec) {
+        uint32_t age = nowSec - entry.createdAtSec;
+        if (age < 60) {
+            snprintf(out, outSize, "now");
+        } else if (age < 3600) {
+            snprintf(out, outSize, "%lum ago", (unsigned long)(age / 60));
+        } else if (age < 86400) {
+            snprintf(out, outSize, "%luh ago", (unsigned long)(age / 3600));
+        } else {
+            snprintf(out, outSize, "%lud ago", (unsigned long)(age / 86400));
+        }
+        return;
+    }
+
+    if (entry.uptimeMs > 0 && millis() >= entry.uptimeMs) {
+        uint32_t age = (millis() - entry.uptimeMs) / 1000UL;
+        if (age < 60) {
+            snprintf(out, outSize, "this boot");
+        } else if (age < 3600) {
+            snprintf(out, outSize, "%lum this boot", (unsigned long)(age / 60));
+        } else {
+            snprintf(out, outSize, "%luh this boot", (unsigned long)(age / 3600));
+        }
+        return;
+    }
+
+    snprintf(out, outSize, "saved");
+}
+
+static void formatHistoryMeta(const transcript_log::Entry& entry, char* out, size_t outSize) {
+    char age[20];
+    formatHistoryAge(entry, age, sizeof(age));
+
+    char duration[12] = "";
+    if (entry.durationSecondsX10 > 0) {
+        snprintf(duration, sizeof(duration), "  %u.%us",
+                 (unsigned)(entry.durationSecondsX10 / 10),
+                 (unsigned)(entry.durationSecondsX10 % 10));
+    }
+
+    if (entry.lang[0]) {
+        snprintf(out, outSize, "%s%s  %s", age, duration, entry.lang);
+    } else {
+        snprintf(out, outSize, "%s%s", age, duration);
+    }
+}
+
+static void drawHistoryListView(const char* source) {
+    transcript_log::prune(currentEpochSec());
+    const size_t total = transcript_log::count();
+    if (total == 0) {
+        g_historyIndex = 0;
+        Serial.printf("[history] draw empty source=%s\n", source);
+        ui::clearToBlack();
+        ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
+        ui::drawHistoryList(0, 0, "", "");
+        return;
+    }
+
+    if (g_historyIndex >= total) g_historyIndex = 0;
+    transcript_log::Entry entry;
+    if (!transcript_log::getNewest(g_historyIndex, entry)) return;
+
+    char meta[48];
+    formatHistoryMeta(entry, meta, sizeof(meta));
+    Serial.printf("[history] draw index=%u total=%u source=%s\n",
+                  (unsigned)g_historyIndex,
+                  (unsigned)total,
+                  source);
+    ui::clearToBlack();
+    ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
+    ui::drawHistoryList(total, g_historyIndex, meta, entry.text);
+}
+
+static void enterHistoryList(const char* source) {
+    Serial.printf("[btn] %s -> history\n", source);
+    ui::pageReset();
+    g_mode = Mode::HISTORY_LIST;
+    g_historyIndex = 0;
+    drawHistoryListView(source);
+}
+
+static void openHistoryEntry(const char* source) {
+    const size_t total = transcript_log::count();
+    if (total == 0) {
+        returnToPet("history empty");
+        return;
+    }
+    if (g_historyIndex >= total) g_historyIndex = 0;
+
+    transcript_log::Entry entry;
+    if (!transcript_log::getNewest(g_historyIndex, entry)) return;
+
+    char age[20];
+    formatHistoryAge(entry, age, sizeof(age));
+    snprintf(g_transcriptTitle, sizeof(g_transcriptTitle), "%u/%u  %s",
+             (unsigned)(g_historyIndex + 1),
+             (unsigned)total,
+             age);
+    snprintf(g_transcriptFooter, sizeof(g_transcriptFooter), "A/tap page  B list");
+    strncpy(g_lastTranscript, entry.text, sizeof(g_lastTranscript) - 1);
+    g_lastTranscript[sizeof(g_lastTranscript) - 1] = '\0';
+
+    Serial.printf("[history] open index=%u total=%u source=%s\n",
+                  (unsigned)g_historyIndex,
+                  (unsigned)total,
+                  source);
+    ui::pageReset();
+    g_mode = Mode::HISTORY_READING;
+    ui::clearToBlack();
+    ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
+    ui::drawTranscript(g_lastTranscript, g_transcriptTitle, g_transcriptFooter);
+}
+
+// Pull transcription fields out of a JSON response like
+// `{"text": "...", "duration_s": 1.2, "lang": "en", ...}`.
+static void extractTranscriptResult(const char* json,
+                                    char* out,
+                                    size_t outSize,
+                                    float* durationSeconds,
+                                    char* langOut,
+                                    size_t langOutSize) {
     out[0] = '\0';
+    if (durationSeconds) *durationSeconds = 0.0f;
+    if (langOut && langOutSize) langOut[0] = '\0';
+
     JsonDocument doc;
     if (deserializeJson(doc, json) != DeserializationError::Ok) return;
     const char* t = doc["text"] | "";
     strncpy(out, t, outSize - 1);
     out[outSize - 1] = '\0';
+    if (durationSeconds) *durationSeconds = doc["duration_s"] | 0.0f;
+    if (langOut && langOutSize) {
+        const char* lang = doc["lang"] | "";
+        strncpy(langOut, lang, langOutSize - 1);
+        langOut[langOutSize - 1] = '\0';
+    }
 }
 
 static void beginRecording(const char* source) {
-    Serial.printf("[btn] %s -> arming mic\n", source);
+    Serial.printf("[btn] %s -> arming mic (recording_duration=%lus)\n",
+                  source,
+                  (unsigned long)g_recordSeconds);
     ui::clearToBlack();
     ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
     ui::drawArming();
-    audio::startRecording();
+    audio::startRecording(g_recordSeconds);
     audio::pumpRecording();
-    Serial.println("[rec] ready");
+    Serial.printf("[rec] ready cap_s=%lu max_wav_bytes=%u\n",
+                  (unsigned long)audio::maxDurationSeconds(),
+                  (unsigned)audio::MAX_WAV_BYTES);
     g_lastRecRedraw = millis();
     g_mode = Mode::RECORDING;
 
@@ -273,12 +554,20 @@ static void transcribeAndShow(const uint8_t* wav, size_t size) {
     logBodyPreview(code == 200 ? "res" : "err", body, bodyLen);
 
     if (code == 200) {
-        char text[512];
-        extractTranscript(body, text, sizeof(text));
+        char text[TRANSCRIPT_LOG_TEXT_BYTES];
+        char lang[TRANSCRIPT_LOG_LANG_BYTES];
+        float durationSeconds = 0.0f;
+        extractTranscriptResult(body, text, sizeof(text),
+                                &durationSeconds, lang, sizeof(lang));
         if (text[0]) {
             Serial.printf("[transcribe] text=%s\n", text);
             strncpy(g_lastTranscript, text, sizeof(g_lastTranscript) - 1);
             g_lastTranscript[sizeof(g_lastTranscript) - 1] = '\0';
+            snprintf(g_transcriptTitle, sizeof(g_transcriptTitle), "transcript");
+            snprintf(g_transcriptFooter, sizeof(g_transcriptFooter), "A/tap page  B done");
+            if (!transcript_log::add(text, durationSeconds, lang, currentEpochSec())) {
+                Serial.println("[tlog] add failed");
+            }
             g_mode = Mode::SHOWING;
             chirpOk();
             M5.Power.setVibration(120);
@@ -314,6 +603,7 @@ void setup() {
     ui::clearToBlack();
 
     audio::init();
+    transcript_log::init(0);
 
     drawBootScreen("", 0xFFFF);
     connectWifi();
@@ -335,6 +625,7 @@ void setup() {
         PetState s;
         if (net::fetchPetState(s)) {
             g_state = s;
+            syncClock(g_state.ts);
             ui::clearToBlack();
             ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
             if (g_state.last_msg[0]) {
@@ -351,6 +642,11 @@ void setup() {
 void loop() {
     M5.update();
     handleSerialCommands();
+
+    if (handleSettingsChord()) {
+        delay(20);
+        return;
+    }
 
     // --- WiFi watchdog ------------------------------------------------------
     if (!g_wifiUp || WiFi.status() != WL_CONNECTED) {
@@ -373,6 +669,7 @@ void loop() {
             if (net::fetchPetState(s)) {
                 g_state    = s;
                 g_bridgeUp = true;
+                syncClock(g_state.ts);
                 Serial.printf("[poll] mood=%s food=%ld age=%ld ts=%ld\n",
                               s.mood, (long)s.food_today, (long)s.age_s, (long)s.ts);
                 ui::clearToBlack();
@@ -401,6 +698,12 @@ void loop() {
             break;
         }
 
+        // KEYA short -> device-only transcript history.
+        if (btnAClicked()) {
+            enterHistoryList("A click");
+            break;
+        }
+
         // KEYB short -> voice input mode. Recording starts only on the next B.
         if (btnBClicked()) {
             enterVoiceIdle("B click");
@@ -424,7 +727,7 @@ void loop() {
     }
 
     case Mode::VOICE_IDLE: {
-        if (M5.BtnA.wasClicked()) {
+        if (btnAClicked()) {
             returnToPet("A click from voice");
             break;
         }
@@ -447,7 +750,7 @@ void loop() {
             break;
         }
         // A press -> back to home
-        if (M5.BtnA.wasClicked()) {
+        if (btnAClicked()) {
             Serial.println("[btn] A click -> home");
             g_mode = Mode::IDLE;
             g_lastPoll = 0;
@@ -462,7 +765,7 @@ void loop() {
     }
 
     case Mode::CONFIRM: {
-        if (M5.BtnA.wasClicked()) {
+        if (btnAClicked()) {
             Serial.println("[btn] A click -> reset!");
             ui::clearToBlack();
             ui::drawStats(g_state, WiFi.RSSI(), PROXY_URL);
@@ -478,6 +781,7 @@ void loop() {
             int code = net::postReset(fresh);
             if (code == 200) {
                 g_state = fresh;
+                syncClock(g_state.ts);
                 g_mode = Mode::IDLE;
                 g_lastPoll = 0;
                 chirpOk();
@@ -492,7 +796,7 @@ void loop() {
             }
             break;
         }
-        if (M5.BtnB.wasClicked()) {
+        if (btnBClicked()) {
             g_mode = Mode::STATS;
             g_statsAtMs = millis();
             ui::clearToBlack();
@@ -502,6 +806,49 @@ void loop() {
         if (millis() - g_statsAtMs > CONFIRM_TIMEOUT_MS) {
             g_mode = Mode::STATS;
             g_statsAtMs = millis();
+        }
+        break;
+    }
+
+    case Mode::SETTINGS: {
+        int16_t touchX = 0;
+        int16_t touchY = 0;
+        if (touchClicked(&touchX, &touchY)) {
+            uint32_t seconds = durationFromTouch(touchX, touchY);
+            if (seconds) {
+                setRecordSeconds(seconds, "touch");
+                chirpOk();
+                M5.Power.setVibration(90);
+                delay(70);
+                M5.Power.setVibration(0);
+                showDurationSaved("touch");
+                break;
+            }
+            g_settingsAtMs = millis();
+        }
+
+        if (btnBClicked()) {
+            uint32_t next = g_recordSeconds == 10 ? 20 : (g_recordSeconds == 20 ? 30 : 10);
+            setRecordSeconds(next, "B cycle");
+            g_settingsAtMs = millis();
+            drawSettings();
+            break;
+        }
+
+        if (btnAClicked()) {
+            returnToPet("A click from settings");
+            break;
+        }
+
+        if (millis() - g_settingsAtMs > SETTINGS_TIMEOUT_MS) {
+            returnToPet("settings timeout");
+        }
+        break;
+    }
+
+    case Mode::SETTINGS_SAVED: {
+        if (millis() >= g_settingsSavedUntilMs || btnAClicked() || btnBClicked()) {
+            returnToPet("settings saved");
         }
         break;
     }
@@ -531,10 +878,12 @@ void loop() {
             break;
         }
 
-        // Force-stop after 10s
-        if (audio::elapsedSeconds() >= 10) {
-            Serial.println("[rec] force-stop at 10s");
-            finishRecording("10s auto-stop", true);
+        // Force-stop at the selected duration.
+        if (audio::elapsedMillis() >= g_recordSeconds * 1000UL) {
+            Serial.printf("[rec] force-stop at %lus\n", (unsigned long)g_recordSeconds);
+            char reason[24];
+            snprintf(reason, sizeof(reason), "%lus auto-stop", (unsigned long)g_recordSeconds);
+            finishRecording(reason, true);
         }
         break;
     }
@@ -551,19 +900,15 @@ void loop() {
         if (!s_drawn) {
             ui::clearToBlack();
             ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
-            ui::drawTranscript(g_lastTranscript);
+            ui::drawTranscript(g_lastTranscript, g_transcriptTitle, g_transcriptFooter);
             s_drawn = true;
         }
-        if (M5.BtnA.wasClicked()) {
-            s_drawn = false;  // force redraw on next loop
-            ui::clearToBlack();
-            ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
-            if (ui::pageNext()) {
-                ui::drawTranscript(g_lastTranscript);
-            } else {
-                // pageNext wrapped back; just redraw the first page
-                ui::drawTranscript(g_lastTranscript);
-            }
+        int16_t touchX = 0;
+        int16_t touchY = 0;
+        if (btnAClicked()) {
+            pageTranscript("A");
+        } else if (touchClicked(&touchX, &touchY)) {
+            pageTranscript("touch");
         }
         if (btnBClicked()) {
             s_drawn = false;
@@ -571,6 +916,55 @@ void loop() {
             g_mode = Mode::IDLE;
             // Force a fresh poll on the next iteration
             g_lastPoll = 0;
+        }
+        break;
+    }
+
+    case Mode::HISTORY_LIST: {
+        if (transcript_log::count() == 0) {
+            if (btnAClicked() || btnBClicked()) {
+                returnToPet("history empty");
+            }
+            break;
+        }
+
+        if (btnBHold()) {
+            returnToPet("B hold from history");
+            break;
+        }
+
+        if (btnAClicked()) {
+            openHistoryEntry("A click");
+            break;
+        }
+
+        if (btnBClicked()) {
+            g_historyIndex++;
+            if (g_historyIndex >= transcript_log::count()) g_historyIndex = 0;
+            drawHistoryListView("B cycle");
+            break;
+        }
+
+        int16_t touchX = 0;
+        int16_t touchY = 0;
+        if (touchClicked(&touchX, &touchY)) {
+            openHistoryEntry("touch");
+        }
+        break;
+    }
+
+    case Mode::HISTORY_READING: {
+        int16_t touchX = 0;
+        int16_t touchY = 0;
+        if (btnAClicked()) {
+            pageTranscript("A history");
+        } else if (touchClicked(&touchX, &touchY)) {
+            pageTranscript("touch history");
+        }
+        if (btnBClicked()) {
+            ui::pageReset();
+            g_mode = Mode::HISTORY_LIST;
+            drawHistoryListView("B from history entry");
         }
         break;
     }
@@ -588,7 +982,7 @@ void loop() {
             g_lastPoll = 0;
         }
         // Any button press to dismiss early
-        if (M5.BtnA.wasClicked() || M5.BtnB.wasClicked()) {
+        if (btnAClicked() || btnBClicked()) {
             s_drawn = false;
             g_mode = Mode::IDLE;
             g_lastPoll = 0;

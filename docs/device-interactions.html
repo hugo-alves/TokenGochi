@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TokenGochi Device Interactions</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f7f5ef;
+      --surface: #fffdfa;
+      --surface-2: #f0ede3;
+      --text: #1f2933;
+      --muted: #68717c;
+      --border: rgba(31, 41, 51, 0.14);
+      --teal: #0f766e;
+      --teal-soft: rgba(15, 118, 110, 0.12);
+      --amber: #b45309;
+      --amber-soft: rgba(180, 83, 9, 0.12);
+      --rose: #be123c;
+      --rose-soft: rgba(190, 18, 60, 0.1);
+      --blue: #1e3a5f;
+      --blue-soft: rgba(30, 58, 95, 0.1);
+      --shadow: 0 10px 30px rgba(31, 41, 51, 0.08);
+      --font-body: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+      --font-mono: "IBM Plex Mono", "SF Mono", Consolas, monospace;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #101417;
+        --surface: #171d21;
+        --surface-2: #20282d;
+        --text: #edf2f4;
+        --muted: #a2adb5;
+        --border: rgba(237, 242, 244, 0.12);
+        --teal: #2dd4bf;
+        --teal-soft: rgba(45, 212, 191, 0.12);
+        --amber: #f59e0b;
+        --amber-soft: rgba(245, 158, 11, 0.13);
+        --rose: #fb7185;
+        --rose-soft: rgba(251, 113, 133, 0.12);
+        --blue: #93c5fd;
+        --blue-soft: rgba(147, 197, 253, 0.12);
+        --shadow: 0 14px 32px rgba(0, 0, 0, 0.26);
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: var(--font-body);
+      color: var(--text);
+      background-color: var(--bg);
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 32px 32px;
+    }
+
+    a { color: inherit; }
+
+    .wrap {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 180px minmax(0, 1fr);
+      gap: 32px;
+      padding: 28px 0 56px;
+    }
+
+    .toc {
+      position: sticky;
+      top: 20px;
+      align-self: start;
+      padding: 12px;
+      background: color-mix(in srgb, var(--surface) 88%, transparent);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .toc-title {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 8px;
+    }
+
+    .toc a {
+      display: block;
+      text-decoration: none;
+      font-size: 13px;
+      color: var(--muted);
+      padding: 8px;
+      border-radius: 6px;
+    }
+
+    .toc a:hover { color: var(--text); background: var(--surface-2); }
+
+    main { min-width: 0; }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 310px;
+      gap: 24px;
+      align-items: center;
+      margin-bottom: 22px;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(2rem, 5vw, 4.6rem);
+      line-height: 0.95;
+      letter-spacing: 0;
+    }
+
+    .lead {
+      margin: 0;
+      color: var(--muted);
+      font-size: clamp(1rem, 2vw, 1.22rem);
+      line-height: 1.55;
+      max-width: 720px;
+    }
+
+    .rule {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 14px;
+      padding: 7px 10px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--blue);
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    .watch {
+      width: 300px;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      margin: 0 auto;
+      position: relative;
+      background:
+        radial-gradient(circle at center, #111 0 59%, transparent 60%),
+        var(--surface-2);
+      box-shadow: inset 0 0 0 10px #2f3840, inset 0 0 0 14px rgba(255,255,255,0.08), var(--shadow);
+      display: grid;
+      place-items: center;
+    }
+
+    .watch-screen {
+      width: 212px;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      background: #080b0c;
+      border: 1px solid rgba(255,255,255,0.18);
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 32px;
+      color: white;
+    }
+
+    .watch-screen strong {
+      display: block;
+      font-size: 30px;
+      line-height: 1;
+      margin-bottom: 10px;
+    }
+
+    .watch-screen span {
+      color: #a7f3d0;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .key {
+      position: absolute;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      font-family: var(--font-mono);
+      font-weight: 700;
+      color: #121212;
+      border: 3px solid rgba(255,255,255,0.35);
+    }
+
+    .key-a { right: 18px; top: 74px; background: #facc15; }
+    .key-b { right: 18px; bottom: 74px; background: #60a5fa; }
+
+    section { scroll-margin-top: 28px; margin-top: 22px; }
+
+    .section-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 28px 0 12px;
+      font-family: var(--font-mono);
+      color: var(--muted);
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+    }
+
+    .section-head::before {
+      content: "";
+      width: 28px;
+      height: 2px;
+      background: var(--teal);
+    }
+
+    .quick-grid,
+    .mode-grid,
+    .pattern-grid,
+    .guard-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .quick-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .mode-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .pattern-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .guard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: 0 1px 0 rgba(255,255,255,0.05);
+    }
+
+    .card.important {
+      background: color-mix(in srgb, var(--surface) 90%, var(--teal) 10%);
+      border-color: color-mix(in srgb, var(--border) 50%, var(--teal) 50%);
+      box-shadow: var(--shadow);
+    }
+
+    .label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.1px;
+    }
+
+    .label::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    h2, h3, p { margin-top: 0; }
+
+    h2 {
+      font-size: 1.35rem;
+      margin-bottom: 8px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      font-size: 1.05rem;
+      margin-bottom: 8px;
+      letter-spacing: 0;
+    }
+
+    p {
+      color: var(--muted);
+      line-height: 1.5;
+      margin-bottom: 0;
+    }
+
+    .click {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 72px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      margin: 3px 4px 3px 0;
+    }
+
+    .click.a { background: rgba(250, 204, 21, 0.22); }
+    .click.b { background: rgba(96, 165, 250, 0.22); }
+    .click.touch { background: var(--teal-soft); }
+    .click.warn { background: var(--amber-soft); }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(128px, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .step {
+      position: relative;
+      min-height: 120px;
+      padding: 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .step:not(:last-child)::after {
+      content: "->";
+      position: absolute;
+      right: -18px;
+      top: 48px;
+      font-family: var(--font-mono);
+      color: var(--teal);
+      z-index: 1;
+    }
+
+    .step small {
+      display: block;
+      margin-top: 10px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      line-height: 1.4;
+    }
+
+    .status-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .pill {
+      padding: 6px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+
+    .safe-disc {
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 18px;
+      align-items: center;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px;
+    }
+
+    .disc {
+      width: 220px;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      margin: auto;
+      background:
+        linear-gradient(transparent 30%, rgba(255,255,255,0.08) 30% 31%, transparent 31% 45%, rgba(255,255,255,0.08) 45% 46%, transparent 46%),
+        #0b0f10;
+      border: 10px solid #2f3840;
+      display: grid;
+      place-items: center;
+      padding: 32px;
+      color: white;
+      text-align: center;
+    }
+
+    .disc .option {
+      display: block;
+      width: 128px;
+      margin: 7px auto;
+      padding: 8px 0;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.28);
+      color: #a7f3d0;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    .note {
+      border-left: 3px solid var(--amber);
+      background: var(--amber-soft);
+      padding: 12px 14px;
+      border-radius: 0 8px 8px 0;
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    .note strong { color: var(--amber); }
+
+    @media (max-width: 980px) {
+      .wrap {
+        grid-template-columns: 1fr;
+        width: min(100% - 24px, 760px);
+        padding-top: 0;
+      }
+
+      .toc {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        display: flex;
+        gap: 4px;
+        overflow-x: auto;
+        border-radius: 0 0 8px 8px;
+      }
+
+      .toc-title { display: none; }
+      .toc a { white-space: nowrap; }
+
+      header { grid-template-columns: 1fr; }
+      .watch { width: min(300px, 100%); }
+      .quick-grid,
+      .mode-grid,
+      .pattern-grid,
+      .guard-grid,
+      .safe-disc { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr; }
+      .step:not(:last-child)::after {
+        content: "down";
+        right: auto;
+        left: 16px;
+        top: auto;
+        bottom: -18px;
+      }
+    }
+
+    @media print {
+      body { background: white; }
+      .toc { display: none; }
+      .wrap { display: block; width: 100%; padding: 0; }
+      .card, .step, .safe-disc { break-inside: avoid; box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <nav class="toc" aria-label="Page sections">
+      <div class="toc-title">Contents</div>
+      <a href="#quick">Quick Map</a>
+      <a href="#flow">Voice Flow</a>
+      <a href="#modes">Modes</a>
+      <a href="#patterns">Patterns</a>
+      <a href="#shape">Round Screen</a>
+      <a href="#guards">Guards</a>
+    </nav>
+
+    <main>
+      <header>
+        <div>
+          <div class="rule">TokenGochi on-watch controls</div>
+          <h1>What should I click?</h1>
+          <p class="lead">
+            Use this when the watch is on your wrist and you need the button pattern fast.
+            KEYA is the yellow button. KEYB is the blue button. Touch is only a direct selector
+            on the recording-duration settings screen.
+          </p>
+          <div class="status-strip" aria-label="Core button meanings">
+            <span class="pill">A = back, cancel, page, yes on reset</span>
+            <span class="pill">B = enter, start, send, dismiss, no on reset</span>
+            <span class="pill">A + B hold = recording length</span>
+          </div>
+        </div>
+
+        <div class="watch" aria-label="Round TokenGochi watch face with A and B buttons">
+          <div class="key key-a">A</div>
+          <div class="key key-b">B</div>
+          <div class="watch-screen">
+            <div>
+              <strong>PET</strong>
+              <span>B voice<br>B hold stats<br>A+B settings</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <section id="quick">
+        <div class="section-head">Quick Map</div>
+        <div class="quick-grid">
+          <article class="card important">
+            <div class="label">From pet screen</div>
+            <h2>Talk to it</h2>
+            <span class="click b">B short</span>
+            <p>Enters voice mode. This first click does not record yet.</p>
+          </article>
+
+          <article class="card">
+            <div class="label">From pet screen</div>
+            <h2>Check stats</h2>
+            <span class="click b">B hold</span>
+            <p>Shows mood, usage, chats, WiFi RSSI, and current API host.</p>
+          </article>
+
+          <article class="card">
+            <div class="label">From pet, voice, or stats</div>
+            <h2>Change recording length</h2>
+            <span class="click a">A</span><span class="click b">B hold</span>
+            <p>Hold A and B together for about one second, then tap 10, 20, or 30 seconds. A saved screen confirms it worked.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="flow">
+        <div class="section-head">Voice Flow</div>
+        <div class="flow" aria-label="Voice interaction flow">
+          <article class="step">
+            <h3>Pet home</h3>
+            <span class="click b">B short</span>
+            <small>Move into voice mode without opening the mic.</small>
+          </article>
+          <article class="step">
+            <h3>Voice ready</h3>
+            <span class="click b">B short</span>
+            <small>Start recording. Use A here if you changed your mind.</small>
+          </article>
+          <article class="step">
+            <h3>Recording</h3>
+            <span class="click b">B send</span>
+            <span class="click a">A cancel</span>
+            <small>Auto-stops at the selected duration.</small>
+          </article>
+          <article class="step">
+            <h3>Sending</h3>
+            <span class="click warn">wait</span>
+            <small>The watch posts the WAV and waits for transcription.</small>
+          </article>
+          <article class="step">
+            <h3>Transcript</h3>
+            <span class="click a">A page</span>
+            <span class="click touch">tap page</span>
+            <span class="click b">B dismiss</span>
+            <small>Back to pet after dismiss.</small>
+          </article>
+        </div>
+      </section>
+
+      <section id="modes">
+        <div class="section-head">Mode Cards</div>
+        <div class="mode-grid">
+          <article class="card">
+            <div class="label">Pet home</div>
+            <h2>Default screen</h2>
+            <p><span class="click b">B short</span> voice. <span class="click b">B hold</span> stats. <span class="click a">A</span> has no primary action here.</p>
+          </article>
+
+          <article class="card">
+            <div class="label">Voice ready</div>
+            <h2>Armed but not recording</h2>
+            <p><span class="click b">B short</span> records. <span class="click a">A short</span> returns to the pet.</p>
+          </article>
+
+          <article class="card">
+            <div class="label">Recording</div>
+            <h2>Mic is active</h2>
+            <p><span class="click b">B short</span> sends the clip. <span class="click a">A press</span> cancels and does not upload.</p>
+          </article>
+
+          <article class="card">
+            <div class="label">Transcript</div>
+            <h2>Reading result</h2>
+            <p><span class="click a">A short</span> or <span class="click touch">tap</span> pages through text. <span class="click b">B short</span> dismisses.</p>
+          </article>
+
+          <article class="card">
+            <div class="label">Stats</div>
+            <h2>Usage and connection</h2>
+            <p><span class="click b">B short</span> opens reset confirm. <span class="click a">A short</span> returns home.</p>
+          </article>
+
+          <article class="card">
+            <div class="label">Reset confirm</div>
+            <h2>Be deliberate</h2>
+            <p><span class="click a">A short</span> confirms reset. <span class="click b">B short</span> cancels back to stats.</p>
+          </article>
+
+          <article class="card">
+            <div class="label">Settings</div>
+            <h2>Recording duration</h2>
+            <p><span class="click touch">tap</span> selects 10, 20, or 30 seconds, then a saved screen appears before returning home. <span class="click b">B short</span> cycles. <span class="click a">A short</span> exits.</p>
+          </article>
+
+          <article class="card">
+            <div class="label">Error</div>
+            <h2>Something failed</h2>
+            <p><span class="click a">A short</span> or <span class="click b">B short</span> dismisses early. It also auto-dismisses after a short timeout.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="patterns">
+        <div class="section-head">Patterns</div>
+        <div class="pattern-grid">
+          <article class="card">
+            <div class="label">A pattern</div>
+            <h2>Leave safely</h2>
+            <p>A usually means back, cancel, or page. The only exception is reset confirm, where A means yes.</p>
+          </article>
+
+          <article class="card">
+            <div class="label">B pattern</div>
+            <h2>Proceed</h2>
+            <p>B usually moves forward: enter voice, start recording, send, dismiss, open reset, or cancel reset.</p>
+          </article>
+
+          <article class="card">
+            <div class="label">Touch pattern</div>
+            <h2>Only direct choices</h2>
+            <p>Touch is used for settings options. It is not the primary control for pet, voice, recording, or transcript.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="shape">
+        <div class="section-head">Round Screen</div>
+        <div class="safe-disc">
+          <div class="disc" aria-label="Round screen safe area">
+            <span class="option">10 sec</span>
+            <span class="option">20 sec</span>
+            <span class="option">30 sec</span>
+          </div>
+          <div>
+            <h2>The corners do not matter</h2>
+            <p>
+              The watch screen is round, so usable choices stay centered inside the visible disc.
+              In settings, tap the option rows in the middle of the screen. Do not aim for corners;
+              they are outside the practical touch target model.
+            </p>
+            <div class="status-strip">
+              <span class="pill">Centered rows</span>
+              <span class="pill">Large tap targets</span>
+              <span class="pill">Saved screen confirms the tap</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="guards">
+        <div class="section-head">Guards</div>
+        <div class="guard-grid">
+          <article class="card">
+            <div class="label">Accidental settings</div>
+            <h2>A+B only opens from safe modes</h2>
+            <p>Use A+B hold from pet, voice ready, or stats. It does not open while recording, sending, transcript, reset confirm, or error.</p>
+          </article>
+
+          <article class="card">
+            <div class="label">During recording</div>
+            <h2>Buttons are the controls</h2>
+            <p>B sends. A cancels. Touch is ignored so a palm or sleeve does not change settings or trigger a hidden action.</p>
+          </article>
+
+          <article class="card">
+            <div class="label">During transcript</div>
+            <h2>Touch pages text</h2>
+            <p>Tap anywhere on the transcript screen to move to the next page. B still dismisses back to the pet.</p>
+          </article>
+        </div>
+        <p class="note">
+          <strong>WiFi note:</strong> There is no on-watch pairing menu. The device connects on boot to the SSID compiled into firmware secrets.
+          To always use your phone, flash firmware with your phone hotspot SSID and password, then keep that hotspot available.
+        </p>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
