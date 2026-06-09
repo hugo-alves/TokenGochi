@@ -1,6 +1,7 @@
 #include "audio.h"
 #include <M5Unified.h>
 #include <esp_heap_caps.h>
+#include <math.h>
 #include <string.h>
 
 namespace audio {
@@ -10,6 +11,7 @@ static uint32_t s_slotIdx = 0;
 static uint32_t s_startMs = 0;
 static bool s_recording = false;
 static bool s_micActive = false;
+static CaptureStats s_lastStats = {};
 
 // WAV lives in PSRAM; we keep the assembled file alive until the next start.
 static uint8_t* s_wav = nullptr;
@@ -18,6 +20,40 @@ static size_t   s_wavSize = 0;
 static void writeLe16(uint8_t* p, int16_t v) { p[0] = v & 0xFF; p[1] = (v >> 8) & 0xFF; }
 static void writeLe32(uint8_t* p, int32_t v) {
     p[0] = v & 0xFF; p[1] = (v >> 8) & 0xFF; p[2] = (v >> 16) & 0xFF; p[3] = (v >> 24) & 0xFF;
+}
+
+static void updateStats(size_t totalSamples) {
+    s_lastStats = {};
+    s_lastStats.slots = s_slotIdx;
+    s_lastStats.samples = totalSamples;
+    s_lastStats.durationMs = (uint32_t)((totalSamples * 1000UL) / SAMPLE_RATE);
+    if (!s_pcm || totalSamples == 0) return;
+
+    int16_t minSample = INT16_MAX;
+    int16_t maxSample = INT16_MIN;
+    uint32_t peakAbs = 0;
+    uint32_t zeroCrossings = 0;
+    uint64_t sumSquares = 0;
+    int16_t prev = s_pcm[0];
+
+    for (size_t i = 0; i < totalSamples; ++i) {
+        int16_t v = s_pcm[i];
+        if (v < minSample) minSample = v;
+        if (v > maxSample) maxSample = v;
+        int32_t absV = v < 0 ? -(int32_t)v : (int32_t)v;
+        if ((uint32_t)absV > peakAbs) peakAbs = (uint32_t)absV;
+        sumSquares += (uint64_t)absV * (uint64_t)absV;
+        if (i > 0 && ((prev < 0 && v >= 0) || (prev >= 0 && v < 0))) {
+            zeroCrossings++;
+        }
+        prev = v;
+    }
+
+    s_lastStats.minSample = minSample;
+    s_lastStats.maxSample = maxSample;
+    s_lastStats.peakAbs = peakAbs;
+    s_lastStats.rms = (uint32_t)sqrt((double)sumSquares / (double)totalSamples);
+    s_lastStats.zeroCrossings = zeroCrossings;
 }
 
 static void muxToSpeaker() {
@@ -68,19 +104,14 @@ void startRecording() {
 
 int pumpRecording() {
     if (!s_recording || !s_micActive) return 0;
-    if (s_slotIdx >= MAX_SLOTS) {
-        s_recording = false;
-        return 0;
-    }
-    int16_t* slot = s_pcm + s_slotIdx * SLOT_SAMPLES;
-    // record() returns true if there is still room in the internal queue
-    // after this slot was queued. False means the queue is full — we stop
-    // asking for more but the background task is still filling what we have.
-    if (M5.Mic.record(slot, SLOT_SAMPLES, SAMPLE_RATE)) {
+    int queued = 0;
+    while (s_slotIdx < MAX_SLOTS && M5.Mic.isRecording() < 2) {
+        int16_t* slot = s_pcm + s_slotIdx * SLOT_SAMPLES;
+        if (!M5.Mic.record(slot, SLOT_SAMPLES, SAMPLE_RATE)) break;
         s_slotIdx++;
-        return 1;
+        queued++;
     }
-    return 0;
+    return queued;
 }
 
 uint32_t elapsedSeconds() {
@@ -91,12 +122,12 @@ uint32_t elapsedSeconds() {
 bool stopRecording(const uint8_t** wavOut, size_t* sizeOut) {
     s_recording = false;
     if (M5.Mic.isRecording()) {
-        // let the last in-flight slot(s) finish
-        while (M5.Mic.isRecording() == 2) delay(5);
+        while (M5.Mic.isRecording()) delay(5);
     }
     muxToSpeaker();
 
     size_t totalSamples = s_slotIdx * SLOT_SAMPLES;
+    updateStats(totalSamples);
     if (totalSamples == 0) {
         *wavOut = nullptr;
         *sizeOut = 0;
@@ -129,7 +160,7 @@ bool stopRecording(const uint8_t** wavOut, size_t* sizeOut) {
 void cancelRecording() {
     s_recording = false;
     if (M5.Mic.isRecording()) {
-        while (M5.Mic.isRecording() == 2) delay(5);
+        while (M5.Mic.isRecording()) delay(5);
     }
     muxToSpeaker();
     s_slotIdx = 0;
@@ -142,5 +173,7 @@ void chirp(uint16_t freqHz, uint16_t ms) {
 }
 
 bool micActive() { return s_micActive; }
+
+const CaptureStats& lastStats() { return s_lastStats; }
 
 }  // namespace audio

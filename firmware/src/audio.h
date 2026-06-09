@@ -16,12 +16,23 @@
 namespace audio {
 
 constexpr int    SAMPLE_RATE   = 16000;       // Hz
-constexpr int    SLOT_SAMPLES  = 200;          // M5.Mic recommendation
+constexpr int    SLOT_SAMPLES  = 800;          // 50 ms; tolerates display redraw latency
 constexpr int    MAX_SECONDS   = 10;
 constexpr int    MAX_SLOTS     = SAMPLE_RATE / SLOT_SAMPLES * MAX_SECONDS;  // 800
 constexpr int    TOTAL_SAMPLES = SLOT_SAMPLES * MAX_SLOTS;
 constexpr size_t WAV_HEADER    = 44;
 constexpr size_t MAX_WAV_BYTES = WAV_HEADER + TOTAL_SAMPLES * 2;
+
+struct CaptureStats {
+    uint32_t slots;
+    uint32_t samples;
+    uint32_t durationMs;
+    int16_t minSample;
+    int16_t maxSample;
+    uint32_t peakAbs;
+    uint32_t rms;
+    uint32_t zeroCrossings;
+};
 
 // Allocate PSRAM once. Call from setup() before begin().
 void init();
@@ -52,5 +63,8 @@ void chirp(uint16_t freqHz, uint16_t ms);
 
 // True if the mic is currently the active peripheral.
 bool micActive();
+
+// Non-secret stats for the most recently assembled WAV. Does not expose audio.
+const CaptureStats& lastStats();
 
 }  // namespace audio

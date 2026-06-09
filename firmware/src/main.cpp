@@ -252,6 +252,16 @@ static void transcribeAndShow(const uint8_t* wav, size_t size) {
 
     char body[1024];
     size_t bodyLen = 0;
+    const audio::CaptureStats& stats = audio::lastStats();
+    Serial.printf("[rec:wav] slots=%u samples=%u duration_ms=%u min=%d max=%d peak=%u rms=%u zc=%u\n",
+                  (unsigned)stats.slots,
+                  (unsigned)stats.samples,
+                  (unsigned)stats.durationMs,
+                  (int)stats.minSample,
+                  (int)stats.maxSample,
+                  (unsigned)stats.peakAbs,
+                  (unsigned)stats.rms,
+                  (unsigned)stats.zeroCrossings);
     Serial.printf("[transcribe:req] bytes=%u duration_ms=%u timeout_ms=%u endpoint=%s/transcribe\n",
                   (unsigned)size,
                   (unsigned)wavDurationMs(size),
