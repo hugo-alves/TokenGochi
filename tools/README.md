@@ -111,6 +111,8 @@ node tools/record-test-clip.mjs --seconds 3
 Captures the current M5Stack StopWatch AMOLED frame over USB serial and writes
 a PNG. This is a real firmware-side capture, not a camera photo: the firmware
 keeps a PSRAM-backed display mirror and responds to the `TGSHOT` serial command.
+The default PNG applies a circular alpha mask that matches the physical round
+screen; use `--mask none` when you need the raw square framebuffer.
 
 ### Usage
 
@@ -120,6 +122,9 @@ node tools/capture-device-screen.mjs
 
 # stable path for comparisons, PR notes, or manual inspection
 node tools/capture-device-screen.mjs --out screenshots/color-check.png
+
+# raw square framebuffer, useful for debugging clipped layout
+node tools/capture-device-screen.mjs --mask none --out screenshots/raw.png
 
 # use a specific serial port
 node tools/capture-device-screen.mjs --port /dev/cu.usbmodem1101
@@ -140,6 +145,7 @@ directory is gitignored because these PNGs are generated artifacts.
 | `--out FILE`     | timestamped PNG under `screenshots/` | PNG output path                       |
 | `--latest FILE`  | `screenshots/latest.png`          | also copy the capture to this path        |
 | `--no-latest`    | —                                 | skip updating `latest.png`                |
+| `--mask MODE`    | `circle`                          | `circle` for alpha mask, `none` for raw square |
 | `--timeout-ms N` | `90000`                           | overall serial capture timeout            |
 | `--list-ports`   | —                                 | print candidate serial ports and exit     |
 

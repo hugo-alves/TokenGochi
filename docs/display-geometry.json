@@ -1,0 +1,45 @@
+{
+  "screen": {
+    "width_px": 466,
+    "height_px": 466,
+    "shape": "circle",
+    "center_px": {
+      "x": 233,
+      "y": 233
+    },
+    "radius_px": 233,
+    "visible_pixel_test": "(x - 233)^2 + (y - 233)^2 <= 233^2"
+  },
+  "safe_areas": {
+    "largest_inscribed_square": {
+      "x_min": 69,
+      "y_min": 69,
+      "x_max": 397,
+      "y_max": 397,
+      "width_px": 329,
+      "height_px": 329
+    },
+    "full_width_center_band": {
+      "y_min": 233,
+      "y_max": 233,
+      "x_min": 0,
+      "x_max": 465
+    },
+    "row_examples": [
+      { "y": 0, "x_min": 233, "x_max": 233, "width_px": 1 },
+      { "y": 20, "x_min": 139, "x_max": 327, "width_px": 189 },
+      { "y": 36, "x_min": 109, "x_max": 357, "width_px": 249 },
+      { "y": 68, "x_min": 69, "x_max": 397, "width_px": 329 },
+      { "y": 100, "x_min": 42, "x_max": 424, "width_px": 383 },
+      { "y": 233, "x_min": 0, "x_max": 465, "width_px": 466 },
+      { "y": 398, "x_min": 69, "x_max": 397, "width_px": 329 },
+      { "y": 438, "x_min": 123, "x_max": 343, "width_px": 221 },
+      { "y": 465, "x_min": 212, "x_max": 254, "width_px": 43 }
+    ]
+  },
+  "capture": {
+    "tool": "tools/capture-device-screen.mjs",
+    "default_mask": "circle",
+    "raw_square_option": "--mask none"
+  }
+}

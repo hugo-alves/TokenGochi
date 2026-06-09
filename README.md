@@ -116,7 +116,8 @@ pio device monitor             # optional: 115200 baud serial log
   posts a TTS clip to it and prints the (mock) transcript.
 - **Want a device-screen capture?**
   `node tools/capture-device-screen.mjs` captures the current AMOLED frame over
-  USB serial and writes a PNG under `screenshots/`.
+  USB serial and writes a round-masked PNG under `screenshots/`. Display
+  geometry is documented in `docs/display-geometry.json`.
 
 ## API reference
 
@@ -184,6 +185,9 @@ end so it leaves no side effects.
 TokenGochi/
 ├── PLAN.md                              design + decisions
 ├── README.md                            you are here
+├── docs/
+│   ├── display-capture.md               screenshot geometry + mask notes
+│   └── display-geometry.json            round AMOLED usable-area data
 ├── bridge/
 │   ├── tamagotchi-bridge.mjs           the server
 │   ├── com.tokengochi.bridge.plist     launchd template

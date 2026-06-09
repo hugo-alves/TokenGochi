@@ -23,6 +23,14 @@ import { deflateSync } from "node:zlib";
 const DEFAULT_BAUD = 115200;
 const DEFAULT_TIMEOUT_MS = 90000;
 const DEFAULT_DIR = "screenshots";
+const DEFAULT_MASK = "circle";
+const DISPLAY_GEOMETRY = {
+  width: 466,
+  height: 466,
+  centerX: 233,
+  centerY: 233,
+  radius: 233,
+};
 
 function usage() {
   console.log(`Usage:
@@ -34,6 +42,7 @@ Options:
   --out FILE          PNG output path. Default: screenshots/tokengochi-<timestamp>.png
   --latest FILE       Also update this PNG copy. Default: screenshots/latest.png
   --no-latest         Do not update screenshots/latest.png
+  --mask MODE         Pixel mask: circle or none. Default: ${DEFAULT_MASK}
   --timeout-ms N      Overall capture timeout. Default: ${DEFAULT_TIMEOUT_MS}
   --list-ports        Print candidate serial ports and exit
   -h, --help          Show this help
@@ -51,6 +60,7 @@ function parseArgs(argv) {
     timeoutMs: DEFAULT_TIMEOUT_MS,
     latest: resolve(DEFAULT_DIR, "latest.png"),
     updateLatest: true,
+    mask: DEFAULT_MASK,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -84,6 +94,9 @@ function parseArgs(argv) {
       case "--no-latest":
         opts.updateLatest = false;
         break;
+      case "--mask":
+        opts.mask = next();
+        break;
       case "--timeout-ms":
         opts.timeoutMs = Number(next());
         break;
@@ -96,6 +109,7 @@ function parseArgs(argv) {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     opts.out = resolve(DEFAULT_DIR, `tokengochi-${stamp}.png`);
   }
+  if (!["circle", "none"].includes(opts.mask)) throw new Error("invalid --mask; expected circle or none");
   if (!Number.isFinite(opts.baud) || opts.baud <= 0) throw new Error("invalid --baud");
   if (!Number.isFinite(opts.timeoutMs) || opts.timeoutMs <= 0) throw new Error("invalid --timeout-ms");
   return opts;
@@ -249,11 +263,21 @@ function pngChunk(type, data = Buffer.alloc(0)) {
   return out;
 }
 
-function rgb565ToPng(raw, width, height, encoding) {
+function insideCircle(x, y, width, height) {
+  const scaleX = width / DISPLAY_GEOMETRY.width;
+  const scaleY = height / DISPLAY_GEOMETRY.height;
+  const cx = DISPLAY_GEOMETRY.centerX * scaleX;
+  const cy = DISPLAY_GEOMETRY.centerY * scaleY;
+  const r = Math.min(DISPLAY_GEOMETRY.radius * scaleX, DISPLAY_GEOMETRY.radius * scaleY);
+  return ((x - cx) ** 2 + (y - cy) ** 2) <= r ** 2;
+}
+
+function rgb565ToPng(raw, width, height, encoding, mask) {
   const expected = width * height * 2;
   if (raw.length !== expected) throw new Error(`bad raw length: got ${raw.length}, expected ${expected}`);
 
-  const scanlines = Buffer.alloc((width * 3 + 1) * height);
+  const channels = mask === "circle" ? 4 : 3;
+  const scanlines = Buffer.alloc((width * channels + 1) * height);
   let src = 0;
   let dst = 0;
   for (let y = 0; y < height; y++) {
@@ -266,6 +290,7 @@ function rgb565ToPng(raw, width, height, encoding) {
       scanlines[dst++] = Math.round((((v >> 11) & 0x1f) * 255) / 31);
       scanlines[dst++] = Math.round((((v >> 5) & 0x3f) * 255) / 63);
       scanlines[dst++] = Math.round(((v & 0x1f) * 255) / 31);
+      if (channels === 4) scanlines[dst++] = insideCircle(x, y, width, height) ? 255 : 0;
     }
   }
 
@@ -273,7 +298,7 @@ function rgb565ToPng(raw, width, height, encoding) {
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8;
-  ihdr[9] = 2;
+  ihdr[9] = channels === 4 ? 6 : 2;
 
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -307,7 +332,7 @@ function capture(opts) {
     }
 
     const raw = readExactPayload(fd, header.pending, header.byteCount, deadline);
-    const png = rgb565ToPng(raw, header.width, header.height, header.encoding);
+    const png = rgb565ToPng(raw, header.width, header.height, header.encoding, opts.mask);
 
     mkdirSync(dirname(opts.out), { recursive: true });
     writeFileSync(opts.out, png);
@@ -319,7 +344,7 @@ function capture(opts) {
       latest = opts.latest;
     }
 
-    return { port, out: opts.out, latest, ...header };
+    return { port, out: opts.out, latest, mask: opts.mask, ...header };
   } finally {
     closeSync(fd);
   }
@@ -338,7 +363,7 @@ try {
   }
 
   const result = capture(opts);
-  console.log(`captured ${result.width}x${result.height} ${result.encoding} from ${result.port}`);
+  console.log(`captured ${result.width}x${result.height} ${result.encoding} mask=${result.mask} from ${result.port}`);
   console.log(`wrote ${result.out}`);
   if (result.latest) console.log(`updated ${result.latest}`);
 } catch (err) {

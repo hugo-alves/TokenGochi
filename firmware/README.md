@@ -55,7 +55,7 @@ First build downloads the ESP32 toolchain + M5Unified + ArduinoJson
 
 The firmware supports the `TGSHOT` serial command through
 `../tools/capture-device-screen.mjs`. It captures the current 466×466 display
-mirror over USB serial and writes a PNG:
+mirror over USB serial and writes a PNG with the round-screen alpha mask:
 
 ```sh
 cd ..
@@ -63,6 +63,7 @@ node tools/capture-device-screen.mjs
 ```
 
 Captures are written under `screenshots/`, which is gitignored.
+The round-screen geometry is stored in `../docs/display-geometry.json`.
 
 ## Layout
 

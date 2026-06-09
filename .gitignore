@@ -21,7 +21,7 @@ firmware/src/secrets.h
 
 # Tools
 tools/_artifacts/
-screenshots/
+/screenshots/
 
 # Cloudflare
 cloudflare/.wrangler/
