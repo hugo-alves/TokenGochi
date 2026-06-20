@@ -164,11 +164,19 @@ static void derivePaceFields(PetState& out) {
     }
 }
 
-static void applyPaceMood(PetState& out) {
+static bool activityIsGrumpy(const PetState& out) {
+    return strcmp(out.activity_stage, "grumpy") == 0 ||
+           strcmp(out.activity_stage, "very_grumpy") == 0 ||
+           strcmp(out.activity_stage, "very grumpy") == 0;
+}
+
+static void applyUsageMood(PetState& out) {
     if (strcmp(out.codex_pace_kind, "reserve") == 0) {
         copyString(out.mood, sizeof(out.mood), "very hungry");
     } else if (strcmp(out.codex_pace_kind, "deficit") == 0) {
         copyString(out.mood, sizeof(out.mood), "very happy");
+    } else if (activityIsGrumpy(out)) {
+        copyString(out.mood, sizeof(out.mood), "grumpy");
     } else if (strcmp(out.codex_pace_kind, "on_pace") == 0) {
         copyString(out.mood, sizeof(out.mood), "happy");
     }
@@ -177,11 +185,25 @@ static void applyPaceMood(PetState& out) {
 static void parseUsageMetadata(JsonDocument& doc, PetState& out) {
     JsonObject usage = doc["usage"];
     if (usage.isNull()) return;
+
+    JsonObject activity = usage["activity"];
+    if (!activity.isNull()) {
+        copyString(out.activity_stage, sizeof(out.activity_stage), activity["stage"] | "unknown");
+        out.activity_idle_seconds = activity["idle_seconds"] | -1;
+        out.activity_last_active_ts = activity["last_active_ts"] | 0;
+    }
+
     JsonObject codex = usage["codex"];
-    if (codex.isNull()) return;
+    if (codex.isNull()) {
+        applyUsageMood(out);
+        return;
+    }
 
     const char* source = codex["source"] | "";
-    if (strcmp(source, "codex_account") != 0) return;
+    if (strcmp(source, "codex_account") != 0) {
+        applyUsageMood(out);
+        return;
+    }
 
     percentVariantToX10(codex["metric_used_percent"], out.codex_usage_percent_x10);
 
@@ -197,11 +219,11 @@ static void parseUsageMetadata(JsonDocument& doc, PetState& out) {
         copyString(out.codex_pace_kind, sizeof(out.codex_pace_kind), kind);
         copyString(out.codex_pace_label, sizeof(out.codex_pace_label), pace["balance_label"] | "");
         derivePaceFields(out);
-        applyPaceMood(out);
     }
 
     const char* plan = codex["plan_type"] | "";
     copyString(out.codex_plan, sizeof(out.codex_plan), plan);
+    applyUsageMood(out);
 }
 
 int postReset(PetState& out) {

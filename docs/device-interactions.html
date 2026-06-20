@@ -478,13 +478,13 @@
           <p class="lead">
             Use this when the watch is on your wrist and you need the button pattern fast.
             KEYA is the yellow button. KEYB is the blue button. Touch mirrors visible
-            targets such as the home ring, mic, reset choices, duration buttons, and transcript pages.
+            targets such as the home ring, mic, reset choices, settings chips, duration buttons, and transcript pages.
           </p>
           <div class="status-strip" aria-label="Core button meanings">
             <span class="pill">A = history, back, cancel, page, yes on reset</span>
             <span class="pill">B = enter, start, send, dismiss, no on reset</span>
             <span class="pill">touch = visible target or page</span>
-            <span class="pill">A+B hold = recording length</span>
+            <span class="pill">A+B hold = device settings</span>
           </div>
         </div>
 
@@ -527,9 +527,9 @@
 
           <article class="card">
             <div class="label">From pet, voice, or stats</div>
-            <h2>Change recording length</h2>
+            <h2>Change voice mode</h2>
             <span class="click a">A</span><span class="click b">B hold</span>
-            <p>Hold A and B together for about one second, then tap 10, 20, or 30 seconds. A saved screen confirms it worked.</p>
+            <p>Hold A and B together for about one second, then tap Auto, 10, 20, or 30 seconds. A saved screen confirms it worked.</p>
           </article>
         </div>
       </section>
@@ -553,7 +553,7 @@
             <span class="click b">B send</span>
             <span class="click touch">tap mic</span>
             <span class="click a">A cancel</span>
-            <small>Auto-stops at the selected duration.</small>
+            <small>Auto mode trims silence and sends after a voice pause; B or tap sends immediately.</small>
           </article>
           <article class="step">
             <h3>Sending</h3>
@@ -617,8 +617,8 @@
 
           <article class="card">
             <div class="label">Settings</div>
-            <h2>Recording duration</h2>
-            <p><span class="click touch">tap</span> selects 10, 20, or 30 seconds, then a saved screen appears before returning home. <span class="click b">B short</span> cycles. <span class="click a">A short</span> exits.</p>
+            <h2>Device settings</h2>
+            <p><span class="click touch">tap</span> opens voice mode, brightness, volume, feedback, auto-dim, or battery. <span class="click b">B short</span> cycles focus or values. <span class="click b">B hold</span> opens or returns. <span class="click a">A short</span> backs out.</p>
           </article>
 
           <article class="card">
@@ -647,7 +647,7 @@
           <article class="card">
             <div class="label">Touch pattern</div>
             <h2>Visible targets</h2>
-            <p>Touch opens stats from the home ring, starts or sends from the mic, selects reset choices and duration options, pages transcripts, and dismisses stats/errors.</p>
+            <p>Touch opens stats from the home ring, starts or sends from the mic, selects reset choices and settings chips, pages transcripts, and dismisses stats/errors.</p>
           </article>
         </div>
       </section>
@@ -664,13 +664,14 @@
             <h2>The corners do not matter</h2>
             <p>
               The watch screen is round, so usable choices stay centered inside the visible disc.
-              In settings, tap the option circles in the middle of the screen. Do not aim for corners;
+              In settings, tap the option circles and chips in the middle of the screen. Do not aim for corners;
               they are outside the practical touch target model.
             </p>
             <div class="status-strip">
               <span class="pill">Centered targets</span>
               <span class="pill">Large tap targets</span>
-              <span class="pill">Saved screen confirms the tap</span>
+              <span class="pill">Battery lives in settings</span>
+              <span class="pill">Auto-dim stays out of active flows</span>
             </div>
           </div>
         </div>
@@ -698,8 +699,8 @@
           </article>
         </div>
         <p class="note">
-          <strong>WiFi note:</strong> There is no on-watch pairing menu. The device connects on boot to the SSID compiled into firmware secrets.
-          To always use your phone, flash firmware with your phone hotspot SSID and password, then keep that hotspot available.
+          <strong>WiFi note:</strong> There is no on-watch pairing menu. The device connects on boot to the first visible saved network compiled into firmware secrets.
+          Put normal locations first and your phone hotspot last, then keep the fallback hotspot available when you travel.
         </p>
       </section>
     </main>

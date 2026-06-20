@@ -20,6 +20,9 @@ uint8_t moodIndex(const char* mood) {
     if (strcmp(mood, "very hungry") == 0) return PET_HUNGRY;
     if (strcmp(mood, "hungry") == 0) return PET_HUNGRY;
     if (strcmp(mood, "sleepy") == 0) return PET_SLEEPY;
+    if (strcmp(mood, "grumpy") == 0) return PET_SICK;
+    if (strcmp(mood, "very grumpy") == 0) return PET_SICK;
+    if (strcmp(mood, "very_grumpy") == 0) return PET_SICK;
     if (strcmp(mood, "sick")   == 0) return PET_SICK;
     return PET_HAPPY;
 }

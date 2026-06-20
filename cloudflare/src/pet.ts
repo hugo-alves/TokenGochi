@@ -1,10 +1,16 @@
 export function computeMood(foodToday: number, now = new Date(), usage: TokenUsageMetadata | null = null): string {
   const pace = usage?.codex?.pace ?? null;
   const balanceKind = pace?.balance_kind ?? paceKindForStage(pace?.stage);
-  if (balanceKind) {
-    if (balanceKind === "reserve") return "very hungry";
-    if (balanceKind === "deficit") return "very happy";
-    if (balanceKind === "on_pace") return "happy";
+  if (balanceKind === "reserve") return "very hungry";
+  if (balanceKind === "deficit") return "very happy";
+
+  const activityStage = usage?.activity?.stage ?? "unknown";
+  if (activityStage === "grumpy" || activityStage === "very_grumpy") return "grumpy";
+  if (balanceKind === "on_pace") return "happy";
+
+  if (activityStage && activityStage !== "unknown") {
+    if (foodToday < 5_000) return "hungry";
+    return "happy";
   }
 
   const h = now.getHours();
@@ -50,6 +56,12 @@ export interface TokenSnapshot {
 
 export interface TokenUsageMetadata {
   source?: string;
+  activity?: {
+    source?: string | null;
+    last_active_ts?: number | null;
+    idle_seconds?: number | null;
+    stage?: "awake" | "restless" | "grumpy" | "very_grumpy" | "unknown" | string | null;
+  } | null;
   codex?: {
     source?: string;
     plan_type?: string | null;

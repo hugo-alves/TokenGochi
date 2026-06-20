@@ -27,13 +27,20 @@ constexpr size_t MAX_WAV_BYTES = WAV_HEADER + TOTAL_SAMPLES * 2;
 
 struct CaptureStats {
     uint32_t slots;
+    uint32_t rawSamples;
+    uint32_t rawDurationMs;
     uint32_t samples;
     uint32_t durationMs;
+    uint32_t trimStartMs;
+    uint32_t speechMs;
+    uint32_t voiceSlots;
     int16_t minSample;
     int16_t maxSample;
     uint32_t peakAbs;
     uint32_t rms;
     uint32_t zeroCrossings;
+    bool speechDetected;
+    bool trimmed;
 };
 
 // Allocate PSRAM once. Call from setup() before begin().
@@ -58,6 +65,9 @@ uint32_t elapsedMillis();
 // Current runtime capture cap.
 uint32_t maxDurationSeconds();
 
+// True after speech has started and the recorder sees enough trailing silence.
+bool autoStopReady();
+
 // Stop recording, free the mic, and emit a WAV buffer (header + PCM).
 // Returns false if nothing was recorded. *wavOut and *sizeOut are valid
 // until the next call to startRecording() or chirp().
@@ -70,8 +80,15 @@ void cancelRecording();
 // Re-enables the speaker and disables the mic if needed.
 void chirp(uint16_t freqHz, uint16_t ms);
 
+// Master volume for chirps and other speaker feedback, expressed as 0-100%.
+void setVolumePercent(uint8_t volumePercent);
+uint8_t volumePercent();
+
 // True if the mic is currently the active peripheral.
 bool micActive();
+
+// True when the most recently stopped clip contains enough speech to upload.
+bool lastClipHasSpeech();
 
 // Non-secret stats for the most recently assembled WAV. Does not expose audio.
 const CaptureStats& lastStats();

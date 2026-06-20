@@ -1,6 +1,8 @@
 #include "ui.h"
 #include "pet_sprite.h"
 #include "sprites.h"
+#include "battery_status.h"
+#include "device_settings.h"
 #include <M5Unified.h>
 #include <math.h>
 
@@ -47,6 +49,9 @@ static uint16_t moodColor(const char* mood) {
     if (strcmp(mood, "very hungry") == 0) return MOOD_HUNGRY;
     if (strcmp(mood, "hungry") == 0) return MOOD_HUNGRY;
     if (strcmp(mood, "sleepy") == 0) return MOOD_SLEEPY;
+    if (strcmp(mood, "grumpy") == 0) return MOOD_SICK;
+    if (strcmp(mood, "very grumpy") == 0) return MOOD_SICK;
+    if (strcmp(mood, "very_grumpy") == 0) return MOOD_SICK;
     if (strcmp(mood, "sick")   == 0) return MOOD_SICK;
     return FG;
 }
@@ -104,6 +109,26 @@ static void drawCenteredSafeText(int y,
     truncateToWidth(line, sizeof(line), safeWidthAtY(y + target().fontHeight() / 2, pad));
     const int w = target().textWidth(line);
     target().setCursor(SCREEN_CX - w / 2, y);
+    target().print(line);
+}
+
+static void drawCenteredBoxText(int cx,
+                                int y,
+                                int size,
+                                uint16_t color,
+                                const char* text,
+                                int maxWidth,
+                                uint16_t bg = BG) {
+    if (!text) return;
+    char line[80];
+    strncpy(line, text, sizeof(line) - 1);
+    line[sizeof(line) - 1] = '\0';
+
+    target().setTextSize(size);
+    target().setTextColor(color, bg);
+    truncateToWidth(line, sizeof(line), maxWidth);
+    const int w = target().textWidth(line);
+    target().setCursor(cx - w / 2, y);
     target().print(line);
 }
 
@@ -247,6 +272,35 @@ static bool hasCodexPace(const PetState& s) {
            s.codex_pace_delta_x10 != INT16_MIN;
 }
 
+static bool hasActivity(const PetState& s) {
+    return s.activity_idle_seconds >= 0 ||
+           (s.activity_stage[0] && strcmp(s.activity_stage, "unknown") != 0);
+}
+
+static bool activityIsGrumpy(const PetState& s) {
+    return strcmp(s.activity_stage, "grumpy") == 0 ||
+           strcmp(s.activity_stage, "very_grumpy") == 0 ||
+           strcmp(s.activity_stage, "very grumpy") == 0;
+}
+
+static uint16_t activityColor(const PetState& s) {
+    if (strcmp(s.activity_stage, "awake") == 0) return MOOD_HAPPY;
+    if (strcmp(s.activity_stage, "restless") == 0) return MOOD_PECKISH;
+    if (activityIsGrumpy(s)) return MOOD_SICK;
+    return DIM;
+}
+
+static int activityProgressX1000(const PetState& s) {
+    if (strcmp(s.activity_stage, "awake") == 0) return 250;
+    if (strcmp(s.activity_stage, "restless") == 0) return 500;
+    if (strcmp(s.activity_stage, "grumpy") == 0) return 750;
+    if (strcmp(s.activity_stage, "very_grumpy") == 0 ||
+        strcmp(s.activity_stage, "very grumpy") == 0) {
+        return 1000;
+    }
+    return -1;
+}
+
 static void formatPercentX10(char* out, size_t outSize, int x10) {
     if (x10 < 0) x10 = 0;
     if (x10 > 1000) x10 = 1000;
@@ -282,22 +336,137 @@ static void formatPaceLabel(char* out, size_t outSize, const PetState& s) {
     snprintf(out, outSize, "weekly pace");
 }
 
+static void formatHomeFoodLabel(char* out, size_t outSize, const PetState& s) {
+    if (hasCodexPace(s)) {
+        formatPaceLabel(out, outSize, s);
+        return;
+    }
+    if (hasCodexAccountUsage(s)) {
+        char pct[12];
+        formatUsagePercent(pct, sizeof(pct), s);
+        snprintf(out, outSize, "%s weekly", pct);
+        return;
+    }
+    snprintf(out, outSize, "%ldk today", (long)(s.food_today / 1000));
+}
+
+static void formatActivityStage(char* out, size_t outSize, const PetState& s) {
+    if (strcmp(s.activity_stage, "very_grumpy") == 0) {
+        snprintf(out, outSize, "very grumpy");
+    } else if (s.activity_stage[0]) {
+        snprintf(out, outSize, "%s", s.activity_stage);
+    } else {
+        snprintf(out, outSize, "unknown");
+    }
+}
+
+static void formatIdleLabel(char* out, size_t outSize, const PetState& s) {
+    if (s.activity_idle_seconds < 0) {
+        snprintf(out, outSize, "idle ?");
+        return;
+    }
+    int32_t sec = s.activity_idle_seconds;
+    if (sec < 60) {
+        snprintf(out, outSize, "active now");
+    } else if (sec < 3600) {
+        snprintf(out, outSize, "idle %ldm", (long)(sec / 60));
+    } else {
+        long h = sec / 3600;
+        long m = (sec % 3600) / 60;
+        snprintf(out, outSize, "idle %ldh%02ldm", h, m);
+    }
+}
+
+static void drawActivityArc(const PetState& s) {
+    drawArcDots(166, 45, 135, RING_DIM, 5, 6);
+    const int progress = activityProgressX1000(s);
+    if (progress < 0) return;
+    const int endDeg = 45 + (90 * progress) / 1000;
+    drawArcDots(166, 45, endDeg, activityColor(s), 5, 3);
+}
+
+static void drawHomeFoodHeader(const PetState& s, uint16_t accent) {
+    target().fillRect(58, 12, 350, 112, BG);
+
+    char food[32];
+    formatHomeFoodLabel(food, sizeof(food), s);
+    drawCenteredSafeText(54, 3, FG, food, 54);
+
+    target().setTextSize(1);
+    target().setTextColor(DIM, BG);
+    int dotW = target().textWidth("...");
+    target().setCursor(SCREEN_CX - 92, 100);
+    target().print("...");
+    target().setCursor(SCREEN_CX + 92 - dotW, 100);
+    target().print("...");
+
+    drawCenteredSafeText(92, 3, accent, "FOOD", 68);
+}
+
+static void drawAwakePanel(const PetState& s) {
+    const uint16_t awake = activityColor(s);
+    const int x = 120;
+    const int y = 326;
+    const int w = 226;
+    const int h = 104;
+    const int r = 34;
+
+    target().fillRoundRect(x, y, w, h, r, BG);
+    target().drawRoundRect(x, y, w, h, r, RING_DIM);
+    target().drawRoundRect(x + 5, y + 5, w - 10, h - 10, r - 5, 0x2104);
+
+    if (activityProgressX1000(s) >= 0) {
+        target().drawLine(x + 22, y + 30, x + 66, y + 30, activityIsGrumpy(s) ? RING_DIM : awake);
+        target().drawLine(x + w - 66, y + 30, x + w - 22, y + 30, awake);
+        target().drawLine(x + 78, y + h - 14, x + 112, y + h - 14, RING_DIM);
+        target().drawLine(x + w - 112, y + h - 14, x + w - 78, y + h - 14, awake);
+    }
+
+    char idle[24];
+    char stage[18];
+    formatIdleLabel(idle, sizeof(idle), s);
+    formatActivityStage(stage, sizeof(stage), s);
+
+    drawCenteredBoxText(SCREEN_CX, y + 20, 2, FG, "AWAKE", w - 48);
+    drawCenteredBoxText(SCREEN_CX, y + 48, 3, FG, idle, w - 42);
+    drawCenteredBoxText(SCREEN_CX, y + 82, 2, awake, stage, w - 48);
+}
+
 void drawStatus(const PetState& s, bool wifiUp, bool bridgeUp) {
     char line[64];
+    bool showFoodLabel = false;
     if (!wifiUp) {
         snprintf(line, sizeof(line), "wifi ?");
     } else if (!bridgeUp) {
         snprintf(line, sizeof(line), "api ?");
     } else if (hasCodexPace(s)) {
-        formatPaceLabel(line, sizeof(line), s);
+        if (strcmp(s.codex_pace_kind, "reserve") == 0 ||
+            strcmp(s.codex_pace_kind, "deficit") == 0) {
+            const int pct = s.codex_balance_percent_x10 >= 0
+                ? (s.codex_balance_percent_x10 + 5) / 10
+                : 0;
+            snprintf(line, sizeof(line), "%d%% %s",
+                     pct,
+                     strcmp(s.codex_pace_kind, "reserve") == 0 ? "rsv" : "def");
+        } else {
+            formatPaceLabel(line, sizeof(line), s);
+        }
+        showFoodLabel = true;
     } else if (hasCodexAccountUsage(s)) {
         char pct[12];
         formatUsagePercent(pct, sizeof(pct), s);
         snprintf(line, sizeof(line), "%s weekly", pct);
+        showFoodLabel = true;
     } else {
         snprintf(line, sizeof(line), "%ldk tk", (long)(s.food_today / 1000));
+        showFoodLabel = true;
     }
-    drawCenteredSafeText(28, 2, wifiUp && bridgeUp ? FG : DIM, line, 56);
+    if (showFoodLabel) {
+        drawCenteredSafeText(18, 1, DIM, "FOOD", 66);
+        drawCenteredSafeText(32, 2, wifiUp && bridgeUp ? FG : DIM, line, 66);
+    } else {
+        drawCenteredSafeText(28, 2, wifiUp && bridgeUp ? FG : DIM, line, 56);
+    }
     flush();
 }
 
@@ -318,49 +487,16 @@ void drawMood(const PetState& s) {
         drawArcDots(HOME_RING_R, -90, 30, accent, HOME_RING_THICKNESS, 6);
     }
 
-    if (hasCodexAccountUsage(s)) {
-        char used[18];
-        char pct[12];
-        formatUsagePercent(pct, sizeof(pct), s);
-        snprintf(used, sizeof(used), "%s used", pct);
-        drawCircularChip(94, SCREEN_CY, 39, used, accent);
-
-        char right[18];
-        if (s.codex_expected_percent_x10 >= 0) {
-            char expPct[12];
-            formatPercentX10(expPct, sizeof(expPct), s.codex_expected_percent_x10);
-            snprintf(right, sizeof(right), "%s exp", expPct);
-        } else if (s.codex_plan[0]) {
-            snprintf(right, sizeof(right), "%s", s.codex_plan);
-        } else {
-            snprintf(right, sizeof(right), "%ldk", (long)(s.food_today / 1000));
-        }
-        drawCircularChip(SCREEN_W - 94, SCREEN_CY, 39, right, FG);
-    } else {
-        char age[16];
-        snprintf(age, sizeof(age), "%dd %dh",
-                 (int)(s.age_s / 86400),
-                 (int)((s.age_s % 86400) / 3600));
-        drawCircularChip(94, SCREEN_CY, 39, age, accent);
-
-        char food[20];
-        snprintf(food, sizeof(food), "%ldk", (long)(s.total_tokens_ever / 1000));
-        drawCircularChip(SCREEN_W - 94, SCREEN_CY, 39, food, accent);
-    }
+    drawHomeFoodHeader(s, accent);
 
     // The pet face is the primary object on the watch face.
     pet_sprite::drawCentered(pet_sprite::moodIndex(s.mood),
                              pet_sprite::currentFrame(),
                              HOME_PET_SCALE);
 
-    drawCenteredSafeText(SCREEN_CY + PET_SPRITE_H * HOME_PET_SCALE / 2 + 8,
-                         2,
-                         accent,
-                         s.mood,
-                         86);
-
-    // Last message as a single subtitle line, truncated with ellipsis.
-    if (s.last_msg[0]) {
+    if (hasActivity(s)) {
+        drawAwakePanel(s);
+    } else if (s.last_msg[0]) {
         char sub[40];
         snprintf(sub, sizeof(sub), "\"%s\"", s.last_msg);
         drawCenteredSafeText(374, 2, DIM, sub, 76);
@@ -713,67 +849,318 @@ void drawVoiceReady() {
     flush();
 }
 
-void drawDurationSettings(uint32_t selectedSeconds) {
-    drawCenteredSafeText(46, 3, 0x87F0, "VOICE", 80);
-    drawCenteredSafeText(90, 2, FG, "recording length", 70);
+static void drawSettingsChrome(const char* title, const char* subtitle = nullptr) {
+    drawArcDots(214, -150, -30, RING_DIM, 4, 5);
+    drawArcDots(214, 210, 330, RING_DIM, 4, 5);
+    drawCenteredSafeText(38, 3, 0x87F0, title, 58);
+    if (subtitle && *subtitle) {
+        drawCenteredSafeText(80, 1, DIM, subtitle, 54);
+    }
+}
 
-    static constexpr uint32_t OPTIONS[] = {10, 20, 30};
-    static constexpr int CIRCLE_R = 49;
-    static constexpr int OPTION_X[] = {142, 233, 324};
-    static constexpr int OPTION_Y[] = {248, 184, 248};
+static void drawRoundButton(int cx,
+                            int cy,
+                            int r,
+                            const char* label,
+                            uint16_t border,
+                            uint16_t fill,
+                            uint16_t text = FG,
+                            int textSize = 2) {
+    target().fillCircle(cx, cy, r, fill);
+    target().drawCircle(cx, cy, r, border);
+    target().drawCircle(cx, cy, r - 5, border == DIM ? RING_DIM : border);
+    drawCenteredBoxText(cx, cy - (textSize == 1 ? 8 : 12), textSize, text, label, r * 2 - 18, fill);
+}
+
+static void drawMenuOption(int cx,
+                           int cy,
+                           const char* label,
+                           const char* value,
+                           bool selected,
+                           uint16_t accent) {
+    const int r = 54;
+    const uint16_t fill = selected ? 0x0340 : BG;
+    const uint16_t border = selected ? accent : RING_DIM;
+    target().fillCircle(cx, cy, r, fill);
+    target().drawCircle(cx, cy, r, border);
+    target().drawCircle(cx, cy, r - 5, selected ? border : DIM);
+    drawCenteredBoxText(cx, cy - 22, 2, selected ? 0x07E0 : FG, label, r * 2 - 16, fill);
+    drawCenteredBoxText(cx, cy + 12, 1, selected ? FG : DIM, value, r * 2 - 18, fill);
+}
+
+static void drawLinearGauge(int y, uint8_t percent, uint16_t accent) {
+    percent = device_settings::clampPercent(percent);
+    const int x = SCREEN_CX - 120;
+    const int w = 240;
+    const int h = 18;
+    const int filled = (w * percent) / 100;
+    target().fillRoundRect(x, y, w, h, h / 2, CHIP_BG);
+    if (filled > 0) {
+        target().fillRoundRect(x, y, filled, h, h / 2, accent);
+    }
+    target().drawRoundRect(x, y, w, h, h / 2, DIM);
+}
+
+static void drawChoicePill(int cx, int cy, const char* label, bool active) {
+    const int w = 70;
+    const int h = 38;
+    const int x = cx - w / 2;
+    const int y = cy - h / 2;
+    const uint16_t fill = active ? 0x0340 : BG;
+    const uint16_t border = active ? 0x07E0 : RING_DIM;
+    target().fillRoundRect(x, y, w, h, 12, fill);
+    target().drawRoundRect(x, y, w, h, 12, border);
+    drawCenteredBoxText(cx, y + 11, 1, active ? 0x07E0 : FG, label, w - 12, fill);
+}
+
+static void drawInfoPill(int cx, int cy, const char* label, const char* value, uint16_t accent) {
+    const int w = 132;
+    const int h = 56;
+    const int x = cx - w / 2;
+    const int y = cy - h / 2;
+    target().fillRoundRect(x, y, w, h, 16, BG);
+    target().drawRoundRect(x, y, w, h, 16, RING_DIM);
+    drawCenteredBoxText(cx, y + 9, 1, DIM, label, w - 16, BG);
+    drawCenteredBoxText(cx, y + 29, 1, accent, value, w - 16, BG);
+}
+
+static void formatBatteryPercent(char* out, size_t outSize, const battery_status::Snapshot& battery) {
+    if (battery.percentKnown && battery.percent >= 0) {
+        snprintf(out, outSize, "%d%%", (int)battery.percent);
+    } else {
+        snprintf(out, outSize, "--%%");
+    }
+}
+
+static const char* feedbackValue(const device_settings::Settings& settings) {
+    if (settings.buttonSound && settings.vibration) return "both";
+    if (settings.buttonSound) return "sound";
+    if (settings.vibration) return "vibe";
+    return "off";
+}
+
+void drawDurationSettings(uint32_t selectedSeconds, bool autoMode) {
+    drawSettingsChrome("VOICE", "auto trims silence");
+
+    static constexpr uint32_t OPTIONS[] = {0, 10, 20, 30};
+    static constexpr int OPTION_X[] = {233, 112, 233, 354};
+    static constexpr int OPTION_Y[] = {176, 272, 272, 272};
 
     for (size_t i = 0; i < sizeof(OPTIONS) / sizeof(OPTIONS[0]); ++i) {
-        const bool selected = selectedSeconds == OPTIONS[i];
-        const uint16_t border = selected ? 0x07E0 : DIM;
+        const bool selected = OPTIONS[i] == 0 ? autoMode : (!autoMode && selectedSeconds == OPTIONS[i]);
         const uint16_t fill = selected ? 0x0340 : BG;
-        target().fillCircle(OPTION_X[i], OPTION_Y[i], CIRCLE_R, fill);
-        target().drawCircle(OPTION_X[i], OPTION_Y[i], CIRCLE_R, border);
-        if (selected) {
-            target().drawCircle(OPTION_X[i], OPTION_Y[i], CIRCLE_R - 5, border);
-        }
+        const uint16_t border = selected ? 0x07E0 : RING_DIM;
+        target().fillCircle(OPTION_X[i], OPTION_Y[i], 56, fill);
+        target().drawCircle(OPTION_X[i], OPTION_Y[i], 56, border);
+        target().drawCircle(OPTION_X[i], OPTION_Y[i], 50, selected ? 0x07E0 : DIM);
 
         char label[16];
-        snprintf(label, sizeof(label), "%lus", (unsigned long)OPTIONS[i]);
-        target().setTextSize(3);
-        target().setTextColor(selected ? 0x07E0 : FG, fill);
-        int w = target().textWidth(label);
-        target().setCursor(OPTION_X[i] - w / 2,
-                           OPTION_Y[i] - target().fontHeight() / 2);
-        target().print(label);
+        if (OPTIONS[i] == 0) {
+            snprintf(label, sizeof(label), "AUTO");
+        } else {
+            snprintf(label, sizeof(label), "%lus", (unsigned long)OPTIONS[i]);
+        }
+        drawCenteredBoxText(OPTION_X[i], OPTION_Y[i] - 17, OPTIONS[i] == 0 ? 2 : 3,
+                            selected ? 0x07E0 : FG, label, 88, fill);
     }
 
-    drawHintLine("tap duration  |  B cycle");
+    drawCenteredSafeText(340, 1, DIM, "auto stops after your voice", 54);
+    drawHintLine("tap option | B next");
     flush();
 }
 
 void drawDurationSaved(uint32_t selectedSeconds) {
-    drawArcDots(HOME_RING_R, -80, 260, RING_DIM, HOME_RING_THICKNESS, 8);
-    drawCenteredSafeText(SCREEN_CY - 78, 2, DIM, "recording length", 72);
+    drawSettingsChrome("SAVED", "voice duration");
 
-    target().setTextSize(4);
+    target().setTextSize(5);
     target().setTextColor(0x07E0, BG);
     char label[16];
     snprintf(label, sizeof(label), "%lus", (unsigned long)selectedSeconds);
     int w = target().textWidth(label);
-    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 22);
+    target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 28);
     target().print(label);
 
-    drawCenteredSafeText(SCREEN_CY + 42, 2, FG, "saved", 76);
+    drawCenteredSafeText(SCREEN_CY + 58, 2, FG, "ready", 76);
     flush();
 }
 
-void drawRec(uint32_t elapsedS, uint32_t totalS) {
+void drawSettingsMenu(const device_settings::Settings& settings,
+                      const battery_status::Snapshot& battery,
+                      battery_status::WarningState warning,
+                      uint8_t selectedIndex) {
+    drawSettingsChrome("SETTINGS", "tap a control");
+
+    char voice[10];
+    char bright[10];
+    char volume[10];
+    char batt[10];
+    snprintf(voice, sizeof(voice), "%s", device_settings::recordModeLabel(settings));
+    snprintf(bright, sizeof(bright), "%u%%", (unsigned)settings.brightnessPercent);
+    snprintf(volume, sizeof(volume), "%u%%", (unsigned)settings.volumePercent);
+    formatBatteryPercent(batt, sizeof(batt), battery);
+
+    static constexpr const char* LABELS[] = {
+        "Voice", "Screen", "Volume", "Feel", "Dim", "Battery"
+    };
+    static constexpr int X[] = {142, 324, 142, 324, 142, 324};
+    static constexpr int Y[] = {154, 154, 248, 248, 342, 342};
+    static constexpr uint8_t COUNT = sizeof(LABELS) / sizeof(LABELS[0]);
+
+    for (uint8_t i = 0; i < COUNT; ++i) {
+        const char* value = "";
+        switch (i) {
+            case 0: value = voice; break;
+            case 1: value = bright; break;
+            case 2: value = volume; break;
+            case 3: value = feedbackValue(settings); break;
+            case 4: value = device_settings::autoDimLabel(settings); break;
+            case 5: value = batt; break;
+            default: break;
+        }
+        uint16_t accent = 0x07E0;
+        if (i == 5 && battery_status::isWarning(warning)) {
+            accent = warning == battery_status::WarningState::Critical ? MOOD_SICK : MOOD_HUNGRY;
+        }
+        drawMenuOption(X[i], Y[i], LABELS[i], value, selectedIndex == i, accent);
+    }
+    drawHintLine("tap open | B next");
+    flush();
+}
+
+void drawPercentSetting(const char* title, uint8_t percent, const char* hint) {
+    const bool brightness = strcmp(title, "BRIGHT") == 0;
+    drawSettingsChrome(brightness ? "SCREEN" : title,
+                       brightness ? "display brightness" : "speaker volume");
+
+    char value[12];
+    snprintf(value, sizeof(value), "%u%%", (unsigned)percent);
+    target().setTextSize(5);
+    target().setTextColor(FG, BG);
+    int w = target().textWidth(value);
+    target().setCursor(SCREEN_CX - w / 2, 132);
+    target().print(value);
+
+    drawLinearGauge(218, percent, 0x07E0);
+    drawRoundButton(SCREEN_CX - 86, SCREEN_CY + 84, 58, "-", DIM, BG, FG, 4);
+    drawRoundButton(SCREEN_CX + 86, SCREEN_CY + 84, 58, "+", 0x07E0, 0x0340, 0x07E0, 4);
+    drawHintLine(hint ? hint : "tap -/+ | B +10");
+    flush();
+}
+
+void drawFeedbackSettings(const device_settings::Settings& settings) {
+    drawSettingsChrome("FEEDBACK", "alerts and haptics");
+
+    const int y = SCREEN_CY + 10;
+    const int r = 68;
+    const int left = SCREEN_CX - 76;
+    const int right = SCREEN_CX + 76;
+    const uint16_t soundFill = settings.buttonSound ? 0x0340 : BG;
+    const uint16_t vibeFill = settings.vibration ? 0x0340 : BG;
+
+    target().fillCircle(left, y, r, soundFill);
+    target().drawCircle(left, y, r, settings.buttonSound ? 0x07E0 : RING_DIM);
+    target().drawCircle(left, y, r - 6, settings.buttonSound ? 0x07E0 : DIM);
+    drawCenteredBoxText(left, y - 34, 2, FG, "SOUND", r * 2 - 24, soundFill);
+    drawCenteredBoxText(left, y + 4, 3, settings.buttonSound ? 0x07E0 : DIM,
+                        settings.buttonSound ? "ON" : "OFF", r * 2 - 24, soundFill);
+
+    target().fillCircle(right, y, r, vibeFill);
+    target().drawCircle(right, y, r, settings.vibration ? 0x07E0 : RING_DIM);
+    target().drawCircle(right, y, r - 6, settings.vibration ? 0x07E0 : DIM);
+    drawCenteredBoxText(right, y - 34, 2, FG, "VIBE", r * 2 - 24, vibeFill);
+    drawCenteredBoxText(right, y + 4, 3, settings.vibration ? 0x07E0 : DIM,
+                        settings.vibration ? "ON" : "OFF", r * 2 - 24, vibeFill);
+
+    drawHintLine("tap toggle | B");
+    flush();
+}
+
+void drawAutoDimSettings(const device_settings::Settings& settings) {
+    drawSettingsChrome("AUTO DIM", "screen rests when idle");
+
+    const char* label = device_settings::autoDimLabel(settings);
+    target().setTextSize(5);
+    target().setTextColor(settings.autoDimEnabled ? 0x07E0 : DIM, BG);
+    int w = target().textWidth(label);
+    target().setCursor(SCREEN_CX - w / 2, 128);
+    target().print(label);
+
+    drawChoicePill(92, 252, "off", !settings.autoDimEnabled);
+    drawChoicePill(186, 252, "15s", settings.autoDimEnabled && settings.autoDimTimeoutMs <= 15000);
+    drawChoicePill(280, 252, "30s", settings.autoDimEnabled &&
+                               settings.autoDimTimeoutMs > 15000 &&
+                               settings.autoDimTimeoutMs <= 30000);
+    drawChoicePill(374, 252, "60s", settings.autoDimEnabled && settings.autoDimTimeoutMs > 30000);
+
+    char dim[24];
+    snprintf(dim, sizeof(dim), "dim to %u%%", (unsigned)settings.dimBrightnessPercent);
+    drawCenteredSafeText(318, 2, FG, dim, 66);
+    drawHintLine("tap/B cycle | A");
+    flush();
+}
+
+void drawBatterySettings(const battery_status::Snapshot& battery,
+                         battery_status::WarningState warning,
+                         bool lowBatteryWarningEnabled) {
+    drawSettingsChrome("BATTERY", battery_status::warningLabel(warning));
+
+    char pct[10];
+    formatBatteryPercent(pct, sizeof(pct), battery);
+    target().setTextSize(5);
+    target().setTextColor(battery_status::isWarning(warning) ? MOOD_HUNGRY : FG, BG);
+    int w = target().textWidth(pct);
+    target().setCursor(SCREEN_CX - w / 2, 118);
+    target().print(pct);
+
+    if (battery.percentKnown && battery.percent >= 0) {
+        drawLinearGauge(206, (uint8_t)battery.percent, battery_status::isWarning(warning) ? MOOD_HUNGRY : 0x07E0);
+    }
+
+    char line[48];
+    drawInfoPill(SCREEN_CX - 76, 268, "state", battery_status::chargeLabel(battery.charge), FG);
+    drawInfoPill(SCREEN_CX + 76, 268, "warn", battery_status::warningLabel(warning),
+                 battery_status::isWarning(warning) ? MOOD_HUNGRY : 0x07E0);
+
+    if (battery.voltageKnown) {
+        snprintf(line, sizeof(line), "%dmV", (int)battery.voltageMv);
+    } else {
+        snprintf(line, sizeof(line), "voltage unknown");
+    }
+    drawCenteredSafeText(330, 2, FG, line, 78);
+
+    if (battery.currentKnown) {
+        snprintf(line, sizeof(line), "%ldmA", (long)battery.currentMa);
+        drawCenteredSafeText(360, 1, DIM, line, 64);
+    }
+
+    snprintf(line, sizeof(line), "warnings %s", lowBatteryWarningEnabled ? "on" : "off");
+    drawCenteredSafeText(386, 1, lowBatteryWarningEnabled ? 0x07E0 : DIM, line, 68);
+    drawHintLine("B warn | refresh");
+    flush();
+}
+
+void drawSettingsSaved(const char* label) {
+    drawSettingsChrome("SAVED", label ? label : "settings");
+    drawCenteredSafeText(SCREEN_CY - 12, 3, 0x07E0, "done", 76);
+    flush();
+}
+
+void drawRec(uint32_t elapsedS, uint32_t totalS, bool autoMode) {
     target().fillRect(0, 50, SCREEN_W, SCREEN_H - 82, BG);
     drawCenteredSafeText(58, 3, 0xF800, "REC", 92);
 
     char t[16];
     if (totalS == 0) totalS = 1;
     if (elapsedS > totalS) elapsedS = totalS;
-    snprintf(t, sizeof(t), "%lus", (unsigned long)(totalS - elapsedS));
+    if (autoMode) {
+        snprintf(t, sizeof(t), "AUTO");
+    } else {
+        snprintf(t, sizeof(t), "%lus", (unsigned long)(totalS - elapsedS));
+    }
     drawCircularProgress(128, (int)((elapsedS * 1000UL) / totalS), 0xF800, 8);
     drawMicIcon(SCREEN_CX, SCREEN_CY + 10, 0xF800, 0x1800);
     drawCenteredSafeText(SCREEN_CY + 132, 3, FG, t, 80);
-    drawHintLine("tap/B send  |  A cancel");
+    drawHintLine(autoMode ? "pause sends | B" : "tap/B send | A");
     flush();
 }
 
@@ -831,12 +1218,18 @@ void drawStats(const PetState& s, int rssi, const char* proxyUrl) {
     }
     drawCircularChip(SCREEN_W - 112, SCREEN_CY - 18, 45, line, 0x87F0);
 
-    if (hasCodexAccountUsage(s) && s.codex_plan[0]) {
+    if (hasActivity(s)) {
+        char idle[24];
+        formatIdleLabel(idle, sizeof(idle), s);
+        snprintf(line, sizeof(line), "%s", idle);
+        drawCircularChip(SCREEN_CX, SCREEN_CY + 84, 43, line, activityColor(s));
+    } else if (hasCodexAccountUsage(s) && s.codex_plan[0]) {
         snprintf(line, sizeof(line), "%s", s.codex_plan);
+        drawCircularChip(SCREEN_CX, SCREEN_CY + 84, 43, line, rssi > -70 ? 0x07E0 : 0xFD20);
     } else {
         snprintf(line, sizeof(line), "%d dBm", rssi);
+        drawCircularChip(SCREEN_CX, SCREEN_CY + 84, 43, line, rssi > -70 ? 0x07E0 : 0xFD20);
     }
-    drawCircularChip(SCREEN_CX, SCREEN_CY + 84, 43, line, rssi > -70 ? 0x07E0 : 0xFD20);
 
     drawCenteredSafeText(SCREEN_CY - 34, 3, accent, s.mood, 78);
 

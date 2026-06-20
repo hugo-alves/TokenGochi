@@ -1,13 +1,66 @@
-# Status — `2026-06-09`
+# Status — `2026-06-10`
 
 ## TL;DR
 
-The bridge, tools, and firmware all build, link, and run. The bridge is
-live on `localhost:8787` under launchd (`com.tokengochi.bridge`, PID
-11527). All 17 tests pass. The firmware boots, finds the M5Unified stack
-and the 8 MB PSRAM, and tries to connect to WiFi — but the
-`Parada Clientes` AP is rejecting the association. This is a
-network-side issue, not a firmware or bridge issue.
+Latest verified firmware work adds a first-class device settings area with
+Auto/10/20/30 s voice mode, brightness, volume, feedback, auto-dim, and
+battery status, then refines those screens with a settings-specific visual
+hierarchy. Auto voice mode trims silence, keeps a short pre-roll, stops after a
+detected voice pause, and rejects quiet clips locally before upload.
+The firmware builds, native settings tests pass, the connected StopWatch was
+flashed on `/dev/cu.usbmodem1101`, WiFi joined `DIGI_Z6esTz`, and the bridge
+responded with HTTP 200. Settings and battery screenshots were captured from
+the physical framebuffer. Manual physical button/touch navigation through all
+settings screens is still not verified.
+
+## Device Settings and Battery Status — `2026-06-10`
+
+Verified changes:
+
+- Settings model defaults and normalization are covered by native Unity tests.
+- Settings persist through the ESP32 Preferences/NVS wrapper under the
+  `tg_settings` namespace.
+- Device settings include Auto/10/20/30 s voice mode, brightness, volume,
+  sound feedback, vibration feedback, auto-dim, and battery warnings.
+- Auto voice mode uses slot-level voice activity detection, pre-roll, trailing
+  padding, silence trimming, pause-based auto-stop, and local quiet-clip
+  rejection before `/transcribe`.
+- Brightness applies through `M5.Display.setBrightness()` and volume applies
+  through the existing audio abstraction before chirps.
+- Battery status samples through M5Unified power APIs and displays percentage,
+  voltage, charge state, and warning state.
+- Low-battery warning state is non-modal and limited to safe glanceable modes.
+- Auto-dim is configurable and only dims idle-like modes; active workflows stay
+  bright.
+- A serial-only debug hook was added for repeatable screenshots:
+  `TGSETTINGS` and `TGSETTING VOICE|BRIGHT|VOLUME|FEEDBACK|DIM|BATTERY`.
+
+Checks and device evidence:
+
+- `cd firmware && ../tools/pio test -e native` passed with 7/7 tests.
+- `cd firmware && ../tools/pio run` passed for `m5stack-stopwatch`.
+- `cd firmware && ../tools/pio run -t upload` flashed `/dev/cu.usbmodem1101`.
+- Serial boot evidence showed the watch joined `DIGI_Z6esTz`, received
+  `192.168.1.243`, and reached the bridge with HTTP 200.
+- Serial battery evidence from the final flash showed `percent=100`,
+  `voltage=4166`, `charge=battery`, and `warning=ok`.
+- Serial display-policy evidence from the final flash showed settings timed out
+  back to the pet and auto-dim applied `percent=35`.
+- Physical framebuffer screenshots were captured:
+  `screenshots/settings-menu-ux-2026-06-10.png`,
+  `screenshots/settings-voice-ux-2026-06-10.png`,
+  `screenshots/settings-screen-ux-2026-06-10.png`,
+  `screenshots/settings-volume-ux-2026-06-10.png`,
+  `screenshots/settings-feedback-ux-2026-06-10.png`,
+  `screenshots/settings-auto-dim-ux-2026-06-10.png`, and
+  `screenshots/settings-battery-ux-2026-06-10.png`.
+
+Not verified yet:
+
+- Manual physical A+B/button/touch traversal through every settings screen.
+  The screenshots above were driven by the serial debug hook.
+- Battery behavior at low/critical charge levels and while explicitly running
+  on battery power away from USB.
 
 ## Voice Mode Separation — `2026-06-09`
 

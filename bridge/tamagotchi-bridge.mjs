@@ -69,6 +69,8 @@ const GROQ_URL           = process.env.GROQ_URL || "https://api.groq.com/openai/
 const TOKEN_USAGE_SOURCE = (process.env.TOKEN_USAGE_SOURCE || "auto").trim().toLowerCase();
 const CODEX_USAGE_SCALE  = Math.max(1, parseInt(process.env.CODEX_USAGE_SCALE || "1000", 10));
 const VERSION            = "0.2.0";
+const ACTIVITY_LOOKBACK_DAYS = 7;
+const ACTIVITY_LOOKBACK_MS = ACTIVITY_LOOKBACK_DAYS * 86_400_000;
 
 // ---------------------------------------------------------------- dates ------
 const pad = (n) => String(n).padStart(2, "0");
@@ -93,6 +95,14 @@ function clamp(v, lower, upper) {
   const n = Number(v);
   if (!Number.isFinite(n)) return lower;
   return Math.max(lower, Math.min(upper, n));
+}
+function timestampMs(value) {
+  if (!value) return null;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value > 10_000_000_000 ? value : value * 1000;
+  }
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d.getTime();
 }
 
 // ---------------------------------------------------------------- state ------
@@ -166,10 +176,16 @@ function recordTranscription(text) {
 export function computeMood(foodToday, now = new Date(), usage = null) {
   const pace = usage?.codex?.pace || null;
   const balanceKind = pace?.balance_kind || paceKindForStage(pace?.stage);
-  if (balanceKind) {
-    if (balanceKind === "reserve") return "very hungry";
-    if (balanceKind === "deficit") return "very happy";
-    if (balanceKind === "on_pace") return "happy";
+  if (balanceKind === "reserve") return "very hungry";
+  if (balanceKind === "deficit") return "very happy";
+
+  const activityStage = usage?.activity?.stage || "unknown";
+  if (activityStage === "grumpy" || activityStage === "very_grumpy") return "grumpy";
+  if (balanceKind === "on_pace") return "happy";
+
+  if (activityStage && activityStage !== "unknown") {
+    if (foodToday < 5_000) return "hungry";
+    return "happy";
   }
 
   const h = now.getHours();
@@ -289,6 +305,89 @@ function claudeRoots() {
   return roots.map((r) => join(r, "projects"));
 }
 
+export function activityStage(idleSeconds) {
+  const n = Number(idleSeconds);
+  if (!Number.isFinite(n) || n < 0) return "unknown";
+  if (n < 30 * 60) return "awake";
+  if (n < 90 * 60) return "restless";
+  if (n < 180 * 60) return "grumpy";
+  return "very_grumpy";
+}
+
+export function activityMetadata(lastActiveMs, nowMs = Date.now()) {
+  const last = Number(lastActiveMs);
+  if (!Number.isFinite(last) || last <= 0) {
+    return {
+      source: "local_logs",
+      last_active_ts: null,
+      idle_seconds: null,
+      stage: "unknown",
+    };
+  }
+
+  const idleSeconds = Math.max(0, Math.floor((nowMs - last) / 1000));
+  return {
+    source: "local_logs",
+    last_active_ts: Math.floor(last / 1000),
+    idle_seconds: idleSeconds,
+    stage: activityStage(idleSeconds),
+  };
+}
+
+export function latestActivityMs(candidates) {
+  let latest = null;
+  for (const value of candidates || []) {
+    const ms = timestampMs(value);
+    if (ms == null) continue;
+    if (latest == null || ms > latest) latest = ms;
+  }
+  return latest;
+}
+
+function isClaudeUsageRecord(o) {
+  return !!o?.message?.usage;
+}
+
+function isCodexTokenCountRecord(o) {
+  const payload = o?.payload ?? o;
+  return payload?.type === "token_count" || o?.type === "token_count";
+}
+
+function recordTimestampMs(o, fallbackMs = null) {
+  const payload = o?.payload ?? o;
+  return timestampMs(o?.timestamp ?? payload?.timestamp) ?? fallbackMs;
+}
+
+async function latestClaudeActivityMs(nowMs = Date.now()) {
+  const cutoff = nowMs - ACTIVITY_LOOKBACK_MS;
+  let latest = null;
+  for (const root of claudeRoots()) {
+    for await (const file of walk(root)) {
+      let fileStat;
+      try {
+        fileStat = await stat(file);
+      } catch {
+        continue;
+      }
+      if (fileStat.mtimeMs < cutoff) continue;
+
+      for await (const line of streamLines(file)) {
+        let o;
+        try {
+          o = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (!isClaudeUsageRecord(o)) continue;
+        const ts = recordTimestampMs(o, fileStat.mtimeMs);
+        if (ts == null || ts < cutoff) continue;
+        if (latest == null || ts > latest) latest = ts;
+      }
+    }
+  }
+  return latest;
+}
+
 async function computeClaude(seen) {
   const since = startOfTodayMs();
   let total = 0;
@@ -373,6 +472,62 @@ async function* codexFiles() {
       }
     }
   }
+}
+
+async function* codexActivityFiles(nowMs = Date.now()) {
+  for (const home of codexHomes()) {
+    for (let daysBack = 0; daysBack < ACTIVITY_LOOKBACK_DAYS; daysBack += 1) {
+      const d = new Date(nowMs - daysBack * 86_400_000);
+      const dir = join(home, "sessions", String(d.getFullYear()), pad(d.getMonth() + 1), pad(d.getDate()));
+      let entries;
+      try {
+        entries = await readdir(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const e of entries) {
+        if (e.isFile() && e.name.startsWith("rollout-") && e.name.endsWith(".jsonl")) {
+          yield join(dir, e.name);
+        }
+      }
+    }
+  }
+}
+
+async function latestCodexActivityMs(nowMs = Date.now()) {
+  const cutoff = nowMs - ACTIVITY_LOOKBACK_MS;
+  let latest = null;
+  for await (const file of codexActivityFiles(nowMs)) {
+    let fileStat;
+    try {
+      fileStat = await stat(file);
+    } catch {
+      continue;
+    }
+    if (fileStat.mtimeMs < cutoff) continue;
+
+    for await (const line of streamLines(file)) {
+      let o;
+      try {
+        o = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!isCodexTokenCountRecord(o)) continue;
+      const ts = recordTimestampMs(o, fileStat.mtimeMs);
+      if (ts == null || ts < cutoff) continue;
+      if (latest == null || ts > latest) latest = ts;
+    }
+  }
+  return latest;
+}
+
+async function computeActivity(nowMs = Date.now()) {
+  const [claude, codex] = await Promise.all([
+    latestClaudeActivityMs(nowMs),
+    latestCodexActivityMs(nowMs),
+  ]);
+  return activityMetadata(latestActivityMs([claude, codex]), nowMs);
 }
 
 async function computeCodex() {
@@ -645,6 +800,7 @@ async function tokensToday() {
 
   const seen = new Set();
   const claudePromise = computeClaude(seen);
+  const activityPromise = computeActivity();
   let codexPromise;
   if (TOKEN_USAGE_SOURCE === "codex-account" || TOKEN_USAGE_SOURCE === "account" || TOKEN_USAGE_SOURCE === "auto") {
     codexPromise = computeCodexAccountUsage().catch(async (err) => {
@@ -655,7 +811,7 @@ async function tokensToday() {
   } else {
     codexPromise = computeCodex().then((codex) => ({ codex, metadata: { source: "local_logs" } }));
   }
-  const [claude, codexResult] = await Promise.all([claudePromise, codexPromise]);
+  const [claude, codexResult, activity] = await Promise.all([claudePromise, codexPromise, activityPromise]);
   const codex = codexResult.codex;
   const payload = {
     tokens_today: claude + codex,
@@ -663,6 +819,7 @@ async function tokensToday() {
     usage: {
       source: codexResult.metadata?.source || "local_logs",
       codex: codexResult.metadata,
+      activity,
     },
     ts: Math.floor(Date.now() / 1000),
   };

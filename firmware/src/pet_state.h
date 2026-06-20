@@ -22,6 +22,9 @@ struct PetState {
     char     codex_plan[16];
     char     codex_pace_kind[12];         // reserve, deficit, on_pace
     char     codex_pace_label[24];        // e.g. "12% reserve"
+    int32_t  activity_last_active_ts;      // unix seconds, 0 when unknown
+    int32_t  activity_idle_seconds;        // -1 when unknown
+    char     activity_stage[16];           // awake, restless, grumpy, very_grumpy
 };
 
 inline void petStateReset(PetState& s) {
@@ -31,4 +34,7 @@ inline void petStateReset(PetState& s) {
     s.codex_expected_percent_x10 = -1;
     s.codex_pace_delta_x10 = INT16_MIN;
     s.codex_balance_percent_x10 = -1;
+    s.activity_last_active_ts = 0;
+    s.activity_idle_seconds = -1;
+    strncpy(s.activity_stage, "unknown", sizeof(s.activity_stage) - 1);
 }

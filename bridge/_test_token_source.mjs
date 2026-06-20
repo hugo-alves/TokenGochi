@@ -100,10 +100,14 @@ try {
   assert.equal(r.status, 200);
   assert.equal(j.breakdown.codex, 250);
   assert.equal(j.usage.source, "local_logs_fallback");
+  assert.equal(j.usage.activity.source, "local_logs");
+  assert.equal(j.usage.activity.stage, "awake");
+  assert.equal(typeof j.usage.activity.last_active_ts, "number");
+  assert.equal(typeof j.usage.activity.idle_seconds, "number");
   assert.equal(typeof j.tokens_today, "number");
   assert.equal(typeof j.ts, "number");
   assert(j.tokens_today >= j.breakdown.codex);
-  console.log("test 3 (token snapshot): ok");
+  console.log("test 3 (token snapshot with activity metadata): ok");
 
   console.log("\nAll token-source tests passed.");
 } finally {

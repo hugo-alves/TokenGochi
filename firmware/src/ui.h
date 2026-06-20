@@ -5,6 +5,8 @@
 
 #include "pet_state.h"
 #include "config.h"
+#include "battery_status.h"
+#include "device_settings.h"
 #include <Arduino.h>
 #include <M5Unified.h>
 
@@ -27,7 +29,7 @@ void drawMood(const PetState& s);
 void drawOffline(const char* reason = nullptr);
 
 // Recording overlay with a circular countdown around the mic.
-void drawRec(uint32_t elapsedS, uint32_t totalS);
+void drawRec(uint32_t elapsedS, uint32_t totalS, bool autoMode = false);
 
 // Shown briefly after KEYA press while the mic/codec is being armed.
 void drawArming();
@@ -37,10 +39,23 @@ void drawVoiceReady();
 
 // Recording duration settings. Options are intentionally centered inside the
 // round display so no touch target depends on invisible corners.
-void drawDurationSettings(uint32_t selectedSeconds);
+void drawDurationSettings(uint32_t selectedSeconds, bool autoMode);
 
 // Brief confirmation after a touch selection saves the duration.
 void drawDurationSaved(uint32_t selectedSeconds);
+
+// Device settings menu and adjustment screens.
+void drawSettingsMenu(const device_settings::Settings& settings,
+                      const battery_status::Snapshot& battery,
+                      battery_status::WarningState warning,
+                      uint8_t selectedIndex);
+void drawPercentSetting(const char* title, uint8_t percent, const char* hint);
+void drawFeedbackSettings(const device_settings::Settings& settings);
+void drawAutoDimSettings(const device_settings::Settings& settings);
+void drawBatterySettings(const battery_status::Snapshot& battery,
+                         battery_status::WarningState warning,
+                         bool lowBatteryWarningEnabled);
+void drawSettingsSaved(const char* label);
 
 // "thinking" overlay while the bridge is calling Groq.
 void drawThinking();

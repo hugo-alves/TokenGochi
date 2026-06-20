@@ -9,23 +9,48 @@
 #include "pet_sprite.h"
 #include "audio.h"
 #include "transcript_log.h"
+#include "device_settings.h"
+#include "battery_status.h"
+#include "display_policy.h"
 
 #include <ArduinoJson.h>
 
+struct WifiCredential {
+    const char* ssid;
+    const char* pass;
+};
+
+#ifndef WIFI_NETWORKS
+#if defined(WIFI_SSID) && defined(WIFI_PASS)
+#define WIFI_NETWORKS { { WIFI_SSID, WIFI_PASS } }
+#else
+#error "Define WIFI_NETWORKS in secrets.h"
+#endif
+#endif
+
+static const WifiCredential kWifiNetworks[] = WIFI_NETWORKS;
+static constexpr size_t kWifiNetworkCount = sizeof(kWifiNetworks) / sizeof(kWifiNetworks[0]);
+static_assert(kWifiNetworkCount > 0, "At least one WiFi network must be configured");
+
 // --- globals ---------------------------------------------------------------
 static PetState     g_state;
+static device_settings::Settings g_settings = device_settings::defaults();
 static bool         g_wifiUp     = false;
 static bool         g_bridgeUp   = false;
 static uint32_t     g_lastPoll   = 0;
 static uint32_t     g_lastRecon  = 0;
 static uint32_t     g_lastRecRedraw = 0;
-static uint32_t     g_recordSeconds = audio::DEFAULT_SECONDS;
+static uint32_t     g_recordSeconds = device_settings::RECORD_SECONDS_DEFAULT;
 static uint32_t     g_clockEpochSec = 0;
 static uint32_t     g_clockSyncedAtMs = 0;
 static size_t       g_historyIndex = 0;
 
 enum class Mode : uint8_t { IDLE, VOICE_IDLE, RECORDING, TRANSCRIBING, SHOWING, HISTORY_LIST, HISTORY_READING, STATS, CONFIRM, SETTINGS, SETTINGS_SAVED, ERROR };
+enum class SettingsView : uint8_t { MENU, VOICE, BRIGHTNESS, VOLUME, FEEDBACK, AUTO_DIM, BATTERY };
 static Mode         g_mode = Mode::IDLE;
+static SettingsView g_settingsView = SettingsView::MENU;
+static SettingsView g_settingsSavedReturnView = SettingsView::MENU;
+static uint8_t      g_settingsIndex = 0;
 static char         g_lastTranscript[TRANSCRIPT_LOG_TEXT_BYTES];
 static char         g_transcriptTitle[32];
 static char         g_transcriptFooter[40];
@@ -36,6 +61,11 @@ static uint32_t     g_confirmAtMs = 0;     // when reset confirm opened
 static uint32_t     g_settingsAtMs = 0;
 static uint32_t     g_settingsSavedUntilMs = 0;
 static uint32_t     g_greetingUntilMs = 0; // hide greeting after this
+static uint32_t     g_lastInteractionMs = 0;
+static uint32_t     g_lastBatterySampleMs = 0;
+static battery_status::Snapshot g_battery = battery_status::unknown();
+static battery_status::WarningState g_batteryWarning = battery_status::WarningState::Unknown;
+static display_policy::DisplayState g_displayState = display_policy::DisplayState::Bright;
 static bool         g_greetOnFirstPoll = true;
 static bool         g_suppressButtonsUntilRelease = false;
 static uint32_t     g_suppressButtonsUntilMs = 0;
@@ -48,9 +78,13 @@ static constexpr uint32_t SETTINGS_TIMEOUT_MS = 15000;
 static constexpr uint32_t SETTINGS_SAVED_MS = 900;
 static constexpr uint32_t SETTINGS_CHORD_MS = 1200;
 static constexpr uint32_t GREETING_HOLD_MS = 3000;
+static constexpr uint32_t BATTERY_SAMPLE_MS = 30000;
+static constexpr uint8_t SETTINGS_ITEM_COUNT = 6;
 
 // --- helpers ---------------------------------------------------------------
 static void transcribeAndShow(const uint8_t* wav, size_t size);
+static void enterSettings(const char* source);
+static void openSettingsItem(uint8_t index, const char* source);
 static void returnToPet(const char* source);
 
 static uint32_t currentEpochSec() {
@@ -120,6 +154,26 @@ static void handleSerialCommands() {
             line[len] = '\0';
             if (strcmp(line, "TGSHOT") == 0) {
                 ui::writeScreenshot(Serial);
+            } else if (strcmp(line, "TGSETTINGS") == 0) {
+                enterSettings("serial");
+            } else if (strcmp(line, "TGSETTING VOICE") == 0) {
+                enterSettings("serial");
+                openSettingsItem(0, "serial");
+            } else if (strcmp(line, "TGSETTING BRIGHT") == 0) {
+                enterSettings("serial");
+                openSettingsItem(1, "serial");
+            } else if (strcmp(line, "TGSETTING VOLUME") == 0) {
+                enterSettings("serial");
+                openSettingsItem(2, "serial");
+            } else if (strcmp(line, "TGSETTING FEEDBACK") == 0) {
+                enterSettings("serial");
+                openSettingsItem(3, "serial");
+            } else if (strcmp(line, "TGSETTING DIM") == 0) {
+                enterSettings("serial");
+                openSettingsItem(4, "serial");
+            } else if (strcmp(line, "TGSETTING BATTERY") == 0) {
+                enterSettings("serial");
+                openSettingsItem(5, "serial");
             }
             len = 0;
             continue;
@@ -132,7 +186,11 @@ static void handleSerialCommands() {
     }
 }
 
-static void connectWifi() {
+static void registerWifiEvents() {
+    static bool registered = false;
+    if (registered) return;
+    registered = true;
+
     // Surface the actual reason WiFi fails by listening to events.
     WiFi.onEvent([](WiFiEvent_t e, WiFiEventInfo_t info) {
         switch (e) {
@@ -154,34 +212,179 @@ static void connectWifi() {
             default: break;
         }
     });
+}
 
-    WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
-
-    Serial.printf("[wifi] scanning for SSID '%s'...\n", WIFI_SSID);
-    int found = WiFi.scanNetworks(false, true);  // async=false, show_hidden=true
-    bool saw = false;
-    for (int i = 0; i < found; i++) {
-        if (WiFi.SSID(i) == WIFI_SSID) {
-            Serial.printf("[wifi] found target SSID, ch=%d, rssi=%d\n", WiFi.channel(i), WiFi.RSSI(i));
-            saw = true;
-        }
-    }
-    WiFi.scanDelete();
-    if (!saw) Serial.println("[wifi] !!! target SSID NOT visible to ESP32 (2.4 GHz only)");
-
-    Serial.println("[wifi] connecting...");
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
-    for (int i = 0; i < 40; i++) {
-        if (WiFi.status() == WL_CONNECTED) { g_wifiUp = true; return; }
+static bool connectWifiCredential(const WifiCredential& credential, size_t index) {
+    Serial.printf("[wifi] connecting to saved network %u/%u: '%s'\n",
+                  (unsigned)(index + 1), (unsigned)kWifiNetworkCount, credential.ssid);
+    WiFi.disconnect(false, false);
+    delay(100);
+    WiFi.begin(credential.ssid, credential.pass);
+    for (int i = 0; i < 30; i++) {
+        if (WiFi.status() == WL_CONNECTED) { g_wifiUp = true; return true; }
         delay(500);
         Serial.printf("[wifi] wait %d: status=%d\n", i + 1, (int)WiFi.status());
     }
+    return false;
+}
+
+static void connectWifi() {
+    registerWifiEvents();
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+
+    bool visible[kWifiNetworkCount] = {};
+    Serial.printf("[wifi] scanning for %u saved network(s)...\n", (unsigned)kWifiNetworkCount);
+    int found = WiFi.scanNetworks(false, true);  // async=false, show_hidden=true
+    if (found < 0) {
+        Serial.printf("[wifi] scan failed: %d\n", found);
+        found = 0;
+    }
+    for (int scanIndex = 0; scanIndex < found; scanIndex++) {
+        for (size_t netIndex = 0; netIndex < kWifiNetworkCount; netIndex++) {
+            if (WiFi.SSID(scanIndex) == kWifiNetworks[netIndex].ssid) {
+                visible[netIndex] = true;
+                Serial.printf("[wifi] found saved network %u/%u: '%s', ch=%d, rssi=%d\n",
+                              (unsigned)(netIndex + 1), (unsigned)kWifiNetworkCount,
+                              kWifiNetworks[netIndex].ssid,
+                              WiFi.channel(scanIndex), WiFi.RSSI(scanIndex));
+            }
+        }
+    }
+    WiFi.scanDelete();
+
+    bool sawAny = false;
+    for (size_t i = 0; i < kWifiNetworkCount; i++) {
+        sawAny = sawAny || visible[i];
+        if (!visible[i]) {
+            Serial.printf("[wifi] saved network %u/%u not visible: '%s'\n",
+                          (unsigned)(i + 1), (unsigned)kWifiNetworkCount, kWifiNetworks[i].ssid);
+            continue;
+        }
+        if (connectWifiCredential(kWifiNetworks[i], i)) return;
+    }
+
+    if (!sawAny) Serial.println("[wifi] !!! no saved SSIDs visible to ESP32 (2.4 GHz only)");
     g_wifiUp = false;
 }
 
-static void chirpOk()   { audio::chirp(1200, 80); }
-static void chirpFail() { audio::chirp(400, 200); }
+static bool criticalBatteryActive() {
+    return g_settings.lowBatteryWarning &&
+           g_batteryWarning == battery_status::WarningState::Critical;
+}
+
+static void applyBrightnessForDisplayState(const char* source) {
+    const uint8_t percent = display_policy::targetBrightnessPercent(g_displayState,
+                                                                    g_settings.brightnessPercent,
+                                                                    g_settings.dimBrightnessPercent,
+                                                                    criticalBatteryActive());
+    M5.Display.setBrightness(device_settings::brightnessToHardware(percent));
+    Serial.printf("[display] brightness source=%s state=%s percent=%u\n",
+                  source,
+                  g_displayState == display_policy::DisplayState::Dimmed ? "dimmed" : "bright",
+                  (unsigned)percent);
+}
+
+static void applyDeviceSettings(const char* source) {
+    g_settings = device_settings::normalize(g_settings);
+    g_recordSeconds = device_settings::effectiveRecordSeconds(g_settings);
+    audio::setVolumePercent(g_settings.volumePercent);
+    g_displayState = display_policy::DisplayState::Bright;
+    applyBrightnessForDisplayState(source);
+    Serial.printf("[settings] apply source=%s voice=%s cap=%lus brightness=%u volume=%u sound=%d vibe=%d dim=%s\n",
+                  source,
+                  device_settings::recordModeLabel(g_settings),
+                  (unsigned long)g_recordSeconds,
+                  (unsigned)g_settings.brightnessPercent,
+                  (unsigned)g_settings.volumePercent,
+                  g_settings.buttonSound ? 1 : 0,
+                  g_settings.vibration ? 1 : 0,
+                  device_settings::autoDimLabel(g_settings));
+}
+
+static bool saveSettings(const char* source) {
+    g_settings = device_settings::normalize(g_settings);
+    const bool ok = device_settings::save(g_settings);
+    applyDeviceSettings(source);
+    Serial.printf("[settings] save source=%s ok=%d\n", source, ok ? 1 : 0);
+    return ok;
+}
+
+static void noteInteraction(const char* source) {
+    g_lastInteractionMs = millis();
+    if (g_displayState == display_policy::DisplayState::Dimmed) {
+        g_displayState = display_policy::DisplayState::Bright;
+        applyBrightnessForDisplayState(source);
+    }
+}
+
+static display_policy::ActivityClass displayActivityForMode(Mode mode) {
+    switch (mode) {
+        case Mode::IDLE: return display_policy::ActivityClass::Idle;
+        case Mode::VOICE_IDLE: return display_policy::ActivityClass::VoiceIdle;
+        case Mode::STATS: return display_policy::ActivityClass::Stats;
+        default: return display_policy::ActivityClass::Foreground;
+    }
+}
+
+static void updateDisplayPolicy() {
+    const uint32_t idleMs = millis() - g_lastInteractionMs;
+    const display_policy::DisplayState target =
+        display_policy::targetState(displayActivityForMode(g_mode),
+                                    idleMs,
+                                    g_settings.autoDimEnabled,
+                                    g_settings.autoDimTimeoutMs);
+    if (target != g_displayState) {
+        g_displayState = target;
+        applyBrightnessForDisplayState("policy");
+    }
+}
+
+static bool batteryWarningVisibleInCurrentMode() {
+    if (!g_settings.lowBatteryWarning) return false;
+    if (!battery_status::isWarning(g_batteryWarning)) return false;
+    return g_mode == Mode::IDLE || g_mode == Mode::VOICE_IDLE || g_mode == Mode::STATS;
+}
+
+static void sampleBattery(bool force, const char* source) {
+    const uint32_t now = millis();
+    if (!force && g_lastBatterySampleMs && now - g_lastBatterySampleMs < BATTERY_SAMPLE_MS) return;
+
+    g_battery = battery_status::readHardware(now);
+    g_batteryWarning = battery_status::warningFor(g_battery,
+                                                  g_settings.lowBatteryPercent,
+                                                  g_settings.criticalBatteryPercent);
+    g_lastBatterySampleMs = now;
+    Serial.printf("[battery] source=%s percent=%d known=%d voltage=%d known=%d current=%ld known=%d charge=%s warning=%s\n",
+                  source,
+                  (int)g_battery.percent,
+                  g_battery.percentKnown ? 1 : 0,
+                  (int)g_battery.voltageMv,
+                  g_battery.voltageKnown ? 1 : 0,
+                  (long)g_battery.currentMa,
+                  g_battery.currentKnown ? 1 : 0,
+                  battery_status::chargeLabel(g_battery.charge),
+                  battery_status::warningLabel(g_batteryWarning));
+}
+
+static void chirpOk() {
+    if (g_settings.buttonSound && g_settings.volumePercent > 0) {
+        audio::chirp(1200, 80);
+    }
+}
+
+static void chirpFail() {
+    if (g_settings.buttonSound && g_settings.volumePercent > 0) {
+        audio::chirp(400, 200);
+    }
+}
+
+static void vibrate(uint8_t strength, uint16_t durationMs) {
+    if (!g_settings.vibration || strength == 0 || durationMs == 0) return;
+    M5.Power.setVibration(strength);
+    delay(durationMs);
+    M5.Power.setVibration(0);
+}
 
 static bool buttonsSuppressed() {
     if (g_suppressButtonsUntilRelease) {
@@ -196,18 +399,27 @@ static bool buttonsSuppressed() {
 
 static bool btnAClicked() {
     if (buttonsSuppressed()) return false;
-    return M5.BtnA.wasClicked();
+    if (M5.BtnA.wasClicked()) {
+        noteInteraction("A");
+        return true;
+    }
+    return false;
 }
 
 static bool btnBClicked() {
     if (buttonsSuppressed()) return false;
-    return M5.BtnB.wasClicked();
+    if (M5.BtnB.wasClicked()) {
+        noteInteraction("B");
+        return true;
+    }
+    return false;
 }
 
 static bool btnBHold() {
     if (buttonsSuppressed()) return false;
     if (M5.BtnB.wasHold()) {
         g_suppressButtonsUntilRelease = true;
+        noteInteraction("B hold");
         return true;
     }
     return false;
@@ -223,37 +435,127 @@ static uint32_t clampRecordSeconds(uint32_t seconds) {
     return 30;
 }
 
+static const char* settingsItemName(uint8_t index) {
+    switch (index) {
+        case 0: return "voice";
+        case 1: return "brightness";
+        case 2: return "volume";
+        case 3: return "feedback";
+        case 4: return "auto dim";
+        case 5: return "battery";
+        default: break;
+    }
+    return "settings";
+}
+
+static SettingsView settingsViewForIndex(uint8_t index) {
+    switch (index) {
+        case 0: return SettingsView::VOICE;
+        case 1: return SettingsView::BRIGHTNESS;
+        case 2: return SettingsView::VOLUME;
+        case 3: return SettingsView::FEEDBACK;
+        case 4: return SettingsView::AUTO_DIM;
+        case 5: return SettingsView::BATTERY;
+        default: break;
+    }
+    return SettingsView::MENU;
+}
+
 static void drawSettings() {
     ui::clearToBlack();
-    ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
-    ui::drawDurationSettings(g_recordSeconds);
+    sampleBattery(false, "settings");
+    switch (g_settingsView) {
+        case SettingsView::MENU:
+            ui::drawSettingsMenu(g_settings, g_battery, g_batteryWarning, g_settingsIndex);
+            break;
+        case SettingsView::VOICE:
+            ui::drawDurationSettings(g_recordSeconds, g_settings.recordAuto);
+            break;
+        case SettingsView::BRIGHTNESS:
+            ui::drawPercentSetting("BRIGHT", g_settings.brightnessPercent, "tap -/+ | B +10");
+            break;
+        case SettingsView::VOLUME:
+            ui::drawPercentSetting("VOLUME", g_settings.volumePercent, "tap -/+ | B +10");
+            break;
+        case SettingsView::FEEDBACK:
+            ui::drawFeedbackSettings(g_settings);
+            break;
+        case SettingsView::AUTO_DIM:
+            ui::drawAutoDimSettings(g_settings);
+            break;
+        case SettingsView::BATTERY:
+            sampleBattery(true, "battery view");
+            ui::drawBatterySettings(g_battery, g_batteryWarning, g_settings.lowBatteryWarning);
+            break;
+    }
 }
 
 static void setRecordSeconds(uint32_t seconds, const char* source) {
-    g_recordSeconds = clampRecordSeconds(seconds);
-    Serial.printf("[settings] recording_duration=%lus source=%s\n",
+    g_settings.recordSeconds = clampRecordSeconds(seconds);
+    g_settings.recordAuto = false;
+    saveSettings(source);
+    Serial.printf("[settings] recording_mode=%s cap=%lus source=%s\n",
+                  device_settings::recordModeLabel(g_settings),
                   (unsigned long)g_recordSeconds,
                   source);
 }
 
-static void showDurationSaved(const char* source) {
-    Serial.printf("[settings] saved recording_duration=%lus source=%s\n",
+static void setRecordAuto(const char* source) {
+    g_settings.recordAuto = true;
+    g_settings.recordSeconds = device_settings::RECORD_SECONDS_DEFAULT;
+    saveSettings(source);
+    Serial.printf("[settings] recording_mode=%s cap=%lus source=%s\n",
+                  device_settings::recordModeLabel(g_settings),
                   (unsigned long)g_recordSeconds,
                   source);
+}
+
+static void cycleRecordMode(const char* source) {
+    g_settings = device_settings::cycleRecordMode(g_settings);
+    saveSettings(source);
+    Serial.printf("[settings] recording_mode=%s cap=%lus source=%s\n",
+                  device_settings::recordModeLabel(g_settings),
+                  (unsigned long)g_recordSeconds,
+                  source);
+}
+
+static void showSettingsSaved(const char* label, SettingsView returnView, const char* source) {
+    Serial.printf("[settings] saved label=%s source=%s\n",
+                  label ? label : "settings",
+                  source);
     ui::clearToBlack();
-    ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
-    ui::drawDurationSaved(g_recordSeconds);
+    ui::drawSettingsSaved(label);
     g_mode = Mode::SETTINGS_SAVED;
+    g_settingsSavedReturnView = returnView;
     g_settingsSavedUntilMs = millis() + SETTINGS_SAVED_MS;
 }
 
-static void enterDurationSettings(const char* source) {
-    Serial.printf("[btn] %s -> settings (recording_duration=%lus)\n",
+static void showDurationSaved(const char* source) {
+    char label[24];
+    snprintf(label, sizeof(label), "%s voice", device_settings::recordModeLabel(g_settings));
+    showSettingsSaved(label, SettingsView::MENU, source);
+}
+
+static void enterSettings(const char* source) {
+    Serial.printf("[btn] %s -> settings (voice=%s cap=%lus)\n",
                   source,
+                  device_settings::recordModeLabel(g_settings),
                   (unsigned long)g_recordSeconds);
     ui::pageReset();
     g_mode = Mode::SETTINGS;
+    g_settingsView = SettingsView::MENU;
+    g_settingsIndex = 0;
     g_settingsAtMs = millis();
+    sampleBattery(true, "settings entry");
+    drawSettings();
+}
+
+static void openSettingsItem(uint8_t index, const char* source) {
+    if (index >= SETTINGS_ITEM_COUNT) index = 0;
+    g_settingsIndex = index;
+    g_settingsView = settingsViewForIndex(index);
+    g_settingsAtMs = millis();
+    Serial.printf("[settings] open item=%s source=%s\n", settingsItemName(index), source);
     drawSettings();
 }
 
@@ -276,7 +578,8 @@ static bool handleSettingsChord() {
     if (millis() - g_abHoldStartMs >= SETTINGS_CHORD_MS) {
         g_abHoldStartMs = 0;
         g_suppressButtonsUntilRelease = true;
-        enterDurationSettings("A+B hold");
+        noteInteraction("A+B hold");
+        enterSettings("A+B hold");
     }
 
     return true;
@@ -290,6 +593,7 @@ static bool touchClicked(int16_t* x, int16_t* y) {
         if (detail.wasClicked()) {
             *x = detail.x;
             *y = detail.y;
+            noteInteraction("touch");
             return true;
         }
     }
@@ -309,18 +613,85 @@ static bool pointInHomeRing(int16_t x, int16_t y) {
     return d2 >= (int32_t)178 * 178 && d2 <= (int32_t)233 * 233;
 }
 
+static int settingsMenuItemFromTouch(int16_t x, int16_t y) {
+    static constexpr int CIRCLE_R = 54;
+    static constexpr int OPTION_X[] = {142, 324, 142, 324, 142, 324};
+    static constexpr int OPTION_Y[] = {160, 160, 250, 250, 340, 340};
+    for (uint8_t i = 0; i < SETTINGS_ITEM_COUNT; ++i) {
+        if (pointInCircle(x, y, OPTION_X[i], OPTION_Y[i], CIRCLE_R)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int percentAdjustmentFromTouch(int16_t x, int16_t y) {
+    if (pointInCircle(x, y, SCREEN_CX - 86, SCREEN_CY + 74, 58)) return -10;
+    if (pointInCircle(x, y, SCREEN_CX + 86, SCREEN_CY + 74, 58)) return 10;
+    return 0;
+}
+
 static uint32_t durationFromTouch(int16_t x, int16_t y) {
-    static constexpr int CIRCLE_R = 49;
-    static constexpr int OPTION_X[] = {142, 233, 324};
-    static constexpr int OPTION_Y[] = {248, 184, 248};
-    static constexpr uint32_t OPTIONS[] = {10, 20, 30};
+    static constexpr int CIRCLE_R = 54;
+    static constexpr int OPTION_X[] = {233, 112, 233, 354};
+    static constexpr int OPTION_Y[] = {176, 272, 272, 272};
+    static constexpr uint32_t OPTIONS[] = {0, 10, 20, 30};
 
     for (size_t i = 0; i < sizeof(OPTIONS) / sizeof(OPTIONS[0]); ++i) {
         if (pointInCircle(x, y, OPTION_X[i], OPTION_Y[i], CIRCLE_R)) {
             return OPTIONS[i];
         }
     }
-    return 0;
+    return UINT32_MAX;
+}
+
+static void changeBrightness(int delta, const char* source) {
+    g_settings.brightnessPercent = device_settings::adjustBrightness(g_settings.brightnessPercent, delta);
+    saveSettings(source);
+    g_settingsAtMs = millis();
+    drawSettings();
+}
+
+static void changeVolume(int delta, const char* source) {
+    g_settings.volumePercent = device_settings::adjustVolume(g_settings.volumePercent, delta);
+    saveSettings(source);
+    chirpOk();
+    g_settingsAtMs = millis();
+    drawSettings();
+}
+
+static void cycleFeedback(const char* source) {
+    if (g_settings.buttonSound && g_settings.vibration) {
+        g_settings.buttonSound = false;
+        g_settings.vibration = true;
+    } else if (!g_settings.buttonSound && g_settings.vibration) {
+        g_settings.buttonSound = true;
+        g_settings.vibration = false;
+    } else if (g_settings.buttonSound && !g_settings.vibration) {
+        g_settings.buttonSound = false;
+        g_settings.vibration = false;
+    } else {
+        g_settings.buttonSound = true;
+        g_settings.vibration = true;
+    }
+    saveSettings(source);
+    g_settingsAtMs = millis();
+    drawSettings();
+}
+
+static void cycleAutoDim(const char* source) {
+    g_settings = device_settings::cycleAutoDim(g_settings);
+    saveSettings(source);
+    g_settingsAtMs = millis();
+    drawSettings();
+}
+
+static void toggleBatteryWarnings(const char* source) {
+    g_settings.lowBatteryWarning = !g_settings.lowBatteryWarning;
+    saveSettings(source);
+    sampleBattery(true, source);
+    g_settingsAtMs = millis();
+    drawSettings();
 }
 
 static void pageTranscript(const char* source) {
@@ -473,22 +844,24 @@ static void extractTranscriptResult(const char* json,
 }
 
 static void beginRecording(const char* source) {
-    Serial.printf("[btn] %s -> arming mic (recording_duration=%lus)\n",
+    Serial.printf("[btn] %s -> arming mic (voice=%s cap=%lus)\n",
                   source,
+                  device_settings::recordModeLabel(g_settings),
                   (unsigned long)g_recordSeconds);
     ui::clearToBlack();
     ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
     ui::drawArming();
     audio::startRecording(g_recordSeconds);
     audio::pumpRecording();
-    Serial.printf("[rec] ready cap_s=%lu max_wav_bytes=%u\n",
+    Serial.printf("[rec] ready mode=%s cap_s=%lu max_wav_bytes=%u\n",
+                  device_settings::recordModeLabel(g_settings),
                   (unsigned long)audio::maxDurationSeconds(),
                   (unsigned)audio::MAX_WAV_BYTES);
     g_mode = Mode::RECORDING;
 
     ui::clearToBlack();
     ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
-    ui::drawRec(0, g_recordSeconds);
+    ui::drawRec(0, g_recordSeconds, g_settings.recordAuto);
     g_lastRecRedraw = 0;
 }
 
@@ -499,6 +872,11 @@ static void drawPetHome() {
         ui::drawMood(g_state);
     } else {
         ui::drawOffline("retrying");
+    }
+    if (batteryWarningVisibleInCurrentMode()) {
+        ui::drawHintLine(g_batteryWarning == battery_status::WarningState::Critical
+                             ? "battery critical"
+                             : "battery low");
     }
 }
 
@@ -522,14 +900,25 @@ static void enterVoiceIdle(const char* source) {
 static void finishRecording(const char* source, bool buzz) {
     Serial.printf("[btn] %s -> transcribe\n", source);
     if (buzz) {
-        M5.Power.setVibration(120);
-        delay(80);
-        M5.Power.setVibration(0);
+        vibrate(120, 80);
     }
     const uint8_t* wav = nullptr;
     size_t sz = 0;
     audio::stopRecording(&wav, &sz);
     if (wav && sz > 44) {
+        const audio::CaptureStats& stats = audio::lastStats();
+        if (!audio::lastClipHasSpeech()) {
+            Serial.printf("[rec] quiet clip rejected raw_ms=%u speech_ms=%u voice_slots=%u\n",
+                          (unsigned)stats.rawDurationMs,
+                          (unsigned)stats.speechMs,
+                          (unsigned)stats.voiceSlots);
+            strncpy(g_lastError, "quiet", sizeof(g_lastError) - 1);
+            g_lastError[sizeof(g_lastError) - 1] = '\0';
+            g_mode = Mode::ERROR;
+            g_errorAtMs = millis();
+            chirpFail();
+            return;
+        }
         transcribeAndShow(wav, sz);
     } else {
         Serial.println("[rec] nothing captured");
@@ -555,10 +944,14 @@ static void transcribeAndShow(const uint8_t* wav, size_t size) {
     char body[1024];
     size_t bodyLen = 0;
     const audio::CaptureStats& stats = audio::lastStats();
-    Serial.printf("[rec:wav] slots=%u samples=%u duration_ms=%u min=%d max=%d peak=%u rms=%u zc=%u\n",
+    Serial.printf("[rec:wav] slots=%u raw_ms=%u trim_start_ms=%u send_ms=%u speech_ms=%u voice_slots=%u trimmed=%d min=%d max=%d peak=%u rms=%u zc=%u\n",
                   (unsigned)stats.slots,
-                  (unsigned)stats.samples,
+                  (unsigned)stats.rawDurationMs,
+                  (unsigned)stats.trimStartMs,
                   (unsigned)stats.durationMs,
+                  (unsigned)stats.speechMs,
+                  (unsigned)stats.voiceSlots,
+                  stats.trimmed ? 1 : 0,
                   (int)stats.minSample,
                   (int)stats.maxSample,
                   (unsigned)stats.peakAbs,
@@ -591,9 +984,7 @@ static void transcribeAndShow(const uint8_t* wav, size_t size) {
             }
             g_mode = Mode::SHOWING;
             chirpOk();
-            M5.Power.setVibration(120);
-            delay(80);
-            M5.Power.setVibration(0);
+            vibrate(120, 80);
         } else {
             strncpy(g_lastError, "empty", sizeof(g_lastError) - 1);
             g_mode = Mode::ERROR;
@@ -624,6 +1015,12 @@ void setup() {
     ui::clearToBlack();
 
     audio::init();
+    if (!device_settings::load(g_settings)) {
+        Serial.println("[settings] load failed, using defaults");
+    }
+    applyDeviceSettings("boot");
+    g_lastInteractionMs = millis();
+    sampleBattery(true, "boot");
     transcript_log::init(0);
 
     drawBootScreen("", 0xFFFF);
@@ -641,20 +1038,14 @@ void setup() {
     Serial.printf("[boot] bridge %s (http=%d)\n",
                   g_bridgeUp ? "ok" : "down", net::lastStatus());
 
-    // First real poll: show a quick greeting with last_msg if there is one.
+    // First real poll: land directly on the live home screen.
     if (g_bridgeUp) {
         PetState s;
         if (net::fetchPetState(s)) {
             g_state = s;
             syncClock(g_state.ts);
-            ui::clearToBlack();
-            ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
-            if (g_state.last_msg[0]) {
-                ui::drawGreeting(g_state.last_msg);
-                g_greetingUntilMs = millis() + GREETING_HOLD_MS;
-            } else {
-                ui::drawMood(g_state);
-            }
+            g_greetingUntilMs = 0;
+            drawPetHome();
         }
     }
 }
@@ -663,6 +1054,7 @@ void setup() {
 void loop() {
     M5.update();
     handleSerialCommands();
+    sampleBattery(false, "loop");
 
     if (handleSettingsChord()) {
         delay(20);
@@ -675,7 +1067,7 @@ void loop() {
         if (millis() - g_lastRecon > 10000) {
             g_lastRecon = millis();
             Serial.println("[wifi] reconnecting...");
-            WiFi.reconnect();
+            connectWifi();
         }
     }
 
@@ -693,19 +1085,11 @@ void loop() {
                 syncClock(g_state.ts);
                 Serial.printf("[poll] mood=%s food=%ld age=%ld ts=%ld\n",
                               s.mood, (long)s.food_today, (long)s.age_s, (long)s.ts);
-                ui::clearToBlack();
-                ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
-                if (g_bridgeUp) {
-                    ui::drawMood(g_state);
-                } else {
-                    ui::drawOffline("retrying");
-                }
+                drawPetHome();
             } else {
                 g_bridgeUp = false;
                 Serial.printf("[poll] bridge down (http=%d)\n", net::lastStatus());
-                ui::clearToBlack();
-                ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
-                ui::drawOffline("retrying");
+                drawPetHome();
             }
         }
 
@@ -743,7 +1127,7 @@ void loop() {
         }
 
         // Animate the blink on the pet
-        if (g_bridgeUp && pet_sprite::tickBlink()) {
+        if (g_bridgeUp && !g_greetingUntilMs && pet_sprite::tickBlink()) {
             pet_sprite::drawCentered(pet_sprite::moodIndex(g_state.mood),
                                      pet_sprite::currentFrame(),
                                      2);
@@ -833,9 +1217,7 @@ void loop() {
                     g_mode = Mode::IDLE;
                     g_lastPoll = 0;
                     chirpOk();
-                    M5.Power.setVibration(140);
-                    delay(120);
-                    M5.Power.setVibration(0);
+                    vibrate(140, 120);
                     drawPetHome();
                 } else {
                     snprintf(g_lastError, sizeof(g_lastError), "HTTP %d", code);
@@ -875,9 +1257,7 @@ void loop() {
                 g_mode = Mode::IDLE;
                 g_lastPoll = 0;
                 chirpOk();
-                M5.Power.setVibration(140);
-                delay(120);
-                M5.Power.setVibration(0);
+                vibrate(140, 120);
                 drawPetHome();
             } else {
                 snprintf(g_lastError, sizeof(g_lastError), "HTTP %d", code);
@@ -905,29 +1285,105 @@ void loop() {
         int16_t touchX = 0;
         int16_t touchY = 0;
         if (touchClicked(&touchX, &touchY)) {
-            uint32_t seconds = durationFromTouch(touchX, touchY);
-            if (seconds) {
-                setRecordSeconds(seconds, "touch");
-                chirpOk();
-                M5.Power.setVibration(90);
-                delay(70);
-                M5.Power.setVibration(0);
-                showDurationSaved("touch");
+            if (g_settingsView == SettingsView::MENU) {
+                int item = settingsMenuItemFromTouch(touchX, touchY);
+                if (item >= 0) {
+                    openSettingsItem((uint8_t)item, "touch");
+                    break;
+                }
+            } else if (g_settingsView == SettingsView::VOICE) {
+                uint32_t seconds = durationFromTouch(touchX, touchY);
+                if (seconds != UINT32_MAX) {
+                    if (seconds == 0) {
+                        setRecordAuto("touch");
+                    } else {
+                        setRecordSeconds(seconds, "touch");
+                    }
+                    chirpOk();
+                    vibrate(90, 70);
+                    showDurationSaved("touch");
+                    break;
+                }
+            } else if (g_settingsView == SettingsView::BRIGHTNESS) {
+                int delta = percentAdjustmentFromTouch(touchX, touchY);
+                if (delta != 0) {
+                    changeBrightness(delta, "touch brightness");
+                    break;
+                }
+            } else if (g_settingsView == SettingsView::VOLUME) {
+                int delta = percentAdjustmentFromTouch(touchX, touchY);
+                if (delta != 0) {
+                    changeVolume(delta, "touch volume");
+                    break;
+                }
+            } else if (g_settingsView == SettingsView::FEEDBACK) {
+                if (pointInCircle(touchX, touchY, SCREEN_CX - 76, SCREEN_CY + 12, 72)) {
+                    g_settings.buttonSound = !g_settings.buttonSound;
+                    saveSettings("touch sound");
+                    g_settingsAtMs = millis();
+                    drawSettings();
+                    break;
+                }
+                if (pointInCircle(touchX, touchY, SCREEN_CX + 76, SCREEN_CY + 12, 72)) {
+                    g_settings.vibration = !g_settings.vibration;
+                    saveSettings("touch vibration");
+                    g_settingsAtMs = millis();
+                    drawSettings();
+                    break;
+                }
+            } else if (g_settingsView == SettingsView::AUTO_DIM) {
+                cycleAutoDim("touch auto dim");
+                break;
+            } else if (g_settingsView == SettingsView::BATTERY) {
+                sampleBattery(true, "touch battery refresh");
+                g_settingsAtMs = millis();
+                drawSettings();
                 break;
             }
             g_settingsAtMs = millis();
         }
 
+        if (btnBHold()) {
+            if (g_settingsView == SettingsView::MENU) {
+                openSettingsItem(g_settingsIndex, "B hold");
+            } else {
+                g_settingsView = SettingsView::MENU;
+                g_settingsAtMs = millis();
+                drawSettings();
+            }
+            break;
+        }
+
         if (btnBClicked()) {
-            uint32_t next = g_recordSeconds == 10 ? 20 : (g_recordSeconds == 20 ? 30 : 10);
-            setRecordSeconds(next, "B cycle");
+            if (g_settingsView == SettingsView::MENU) {
+                g_settingsIndex = (g_settingsIndex + 1) % SETTINGS_ITEM_COUNT;
+                drawSettings();
+            } else if (g_settingsView == SettingsView::VOICE) {
+                cycleRecordMode("B duration");
+                drawSettings();
+            } else if (g_settingsView == SettingsView::BRIGHTNESS) {
+                changeBrightness(10, "B brightness");
+            } else if (g_settingsView == SettingsView::VOLUME) {
+                changeVolume(10, "B volume");
+            } else if (g_settingsView == SettingsView::FEEDBACK) {
+                cycleFeedback("B feedback");
+            } else if (g_settingsView == SettingsView::AUTO_DIM) {
+                cycleAutoDim("B auto dim");
+            } else if (g_settingsView == SettingsView::BATTERY) {
+                toggleBatteryWarnings("B battery warning");
+            }
             g_settingsAtMs = millis();
-            drawSettings();
             break;
         }
 
         if (btnAClicked()) {
-            returnToPet("A click from settings");
+            if (g_settingsView == SettingsView::MENU) {
+                returnToPet("A click from settings");
+            } else {
+                g_settingsView = SettingsView::MENU;
+                g_settingsAtMs = millis();
+                drawSettings();
+            }
             break;
         }
 
@@ -944,7 +1400,10 @@ void loop() {
             btnAClicked() ||
             btnBClicked() ||
             touchClicked(&touchX, &touchY)) {
-            returnToPet("settings saved");
+            g_mode = Mode::SETTINGS;
+            g_settingsView = g_settingsSavedReturnView;
+            g_settingsAtMs = millis();
+            drawSettings();
         }
         break;
     }
@@ -957,7 +1416,7 @@ void loop() {
         const uint32_t elapsedS = audio::elapsedSeconds();
         if (elapsedS != g_lastRecRedraw) {
             g_lastRecRedraw = elapsedS;
-            ui::drawRec(elapsedS, g_recordSeconds);
+            ui::drawRec(elapsedS, g_recordSeconds, g_settings.recordAuto);
         }
 
         // A returns to TokenGochi without uploading an unintended clip.
@@ -977,6 +1436,12 @@ void loop() {
         if (touchClicked(&touchX, &touchY) &&
             pointInCircle(touchX, touchY, SCREEN_CX, SCREEN_CY + 10, 92)) {
             finishRecording("touch mic while recording", false);
+            break;
+        }
+
+        if (g_settings.recordAuto && audio::autoStopReady()) {
+            Serial.println("[rec] auto voice pause stop");
+            finishRecording("voice pause", true);
             break;
         }
 
@@ -1096,5 +1561,6 @@ void loop() {
     }
 
     // Cheap liveness ping for the watchdog.
+    updateDisplayPolicy();
     delay(20);
 }

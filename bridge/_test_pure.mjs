@@ -7,8 +7,11 @@ import { join } from "node:path";
 import {
   accountUsageMetadata,
   accountUsagePace,
+  activityMetadata,
+  activityStage,
   codexCumulative,
   computeMood as bridgeComputeMood,
+  latestActivityMs,
   paceBalance,
   paceStage,
 } from "./tamagotchi-bridge.mjs";
@@ -167,5 +170,86 @@ assert.equal(
   "very happy"
 );
 console.log("codex pace: 23/23 ok");
+
+// --- Agent activity ---------------------------------------------------------
+const activityNowMs = Date.parse("2026-06-08T12:00:00Z");
+assert.equal(activityStage(29 * 60), "awake");
+assert.equal(activityStage(30 * 60), "restless");
+assert.equal(activityStage(90 * 60), "grumpy");
+assert.equal(activityStage(180 * 60), "very_grumpy");
+assert.equal(activityStage(-1), "unknown");
+
+assert.deepEqual(
+  activityMetadata(activityNowMs - 10 * 60 * 1000, activityNowMs),
+  {
+    source: "local_logs",
+    last_active_ts: Math.floor((activityNowMs - 10 * 60 * 1000) / 1000),
+    idle_seconds: 600,
+    stage: "awake",
+  },
+  "recent Codex activity -> awake"
+);
+assert.equal(
+  activityMetadata(activityNowMs - 2 * 60 * 60 * 1000, activityNowMs).stage,
+  "grumpy",
+  "stale Codex activity -> grumpy"
+);
+assert.equal(
+  activityMetadata(activityNowMs - 4 * 60 * 60 * 1000, activityNowMs).stage,
+  "very_grumpy",
+  "very stale Codex activity -> very_grumpy"
+);
+assert.equal(
+  latestActivityMs([
+    activityNowMs - 4 * 60 * 60 * 1000,
+    activityNowMs - 5 * 60 * 1000,
+  ]),
+  activityNowMs - 5 * 60 * 1000,
+  "Claude activity counts when Codex has no recent token event"
+);
+assert.deepEqual(
+  activityMetadata(null, activityNowMs),
+  {
+    source: "local_logs",
+    last_active_ts: null,
+    idle_seconds: null,
+    stage: "unknown",
+  },
+  "missing logs -> unknown"
+);
+console.log("agent activity: 10/10 ok");
+
+// --- Mood priority across food and activity --------------------------------
+assert.equal(
+  bridgeComputeMood(0, new Date("2026-06-08T12:00:00"), {
+    codex: { pace: { balance_kind: "reserve" } },
+    activity: { stage: "very_grumpy" },
+  }),
+  "very hungry",
+  "quota reserve keeps very hungry priority"
+);
+assert.equal(
+  bridgeComputeMood(20_000, new Date("2026-06-08T12:00:00"), {
+    codex: { pace: { balance_kind: "on_pace" } },
+    activity: { stage: "grumpy" },
+  }),
+  "grumpy",
+  "on-pace food allows grumpy activity mood"
+);
+assert.equal(
+  bridgeComputeMood(20_000, new Date("2026-06-08T03:00:00"), {
+    activity: { stage: "awake" },
+  }),
+  "happy",
+  "time-of-day fallback only applies when activity is unknown"
+);
+assert.equal(
+  bridgeComputeMood(20_000, new Date("2026-06-08T03:00:00"), {
+    activity: { stage: "unknown" },
+  }),
+  "sleepy",
+  "unknown activity keeps time-of-day fallback"
+);
+console.log("mood priority: 4/4 ok");
 
 console.log("\nAll logic tests passed.");

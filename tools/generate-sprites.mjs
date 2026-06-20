@@ -37,7 +37,14 @@ const C = {
   HEAD_HAPPY:  rgb(0xFF, 0xC0, 0x00),  // warm yellow
   HEAD_HUNGRY: rgb(0xFD, 0xA0, 0x00),  // amber/orange
   HEAD_SLEEPY: rgb(0x00, 0x7F, 0xFF),  // soft blue
-  HEAD_SICK:   rgb(0x07, 0xE0, 0x00),  // bright green
+  HEAD_SICK:   rgb(0x8A, 0x9A, 0x74),  // muted olive for grumpy/sick
+  BELLY:      rgb(0xFF, 0xE5, 0xA3),
+  BELLY_SLEEPY: rgb(0xB8, 0xE4, 0xFF),
+  FOOT:       rgb(0x5A, 0x38, 0x22),
+  CREST_HAPPY:  rgb(0x7A, 0xE5, 0x95),
+  CREST_HUNGRY: rgb(0xFF, 0x58, 0x25),
+  CREST_SLEEPY: rgb(0xB8, 0xE4, 0xFF),
+  CREST_SICK:   rgb(0xFF, 0x39, 0x39),
   EYE:        rgb(0x00, 0x00, 0x00),
   EYE_WHITE:  rgb(0xFF, 0xFF, 0xFF),
   EYE_SPARK:  rgb(0xFF, 0xFF, 0xFF),
@@ -58,6 +65,15 @@ function fillCircle(c, cx, cy, r, color) {
   for (let y = cy - r; y <= cy + r; y++) {
     for (let x = cx - r; x <= cx + r; x++) {
       if ((x - cx) ** 2 + (y - cy) ** 2 <= r * r) setPx(c, x, y, color);
+    }
+  }
+}
+function fillEllipse(c, cx, cy, rx, ry, color) {
+  for (let y = cy - ry; y <= cy + ry; y++) {
+    for (let x = cx - rx; x <= cx + rx; x++) {
+      const dx = (x - cx) / rx;
+      const dy = (y - cy) / ry;
+      if (dx * dx + dy * dy <= 1) setPx(c, x, y, color);
     }
   }
 }
@@ -102,17 +118,50 @@ function drawArc(c, cx, cy, r, startDeg, endDeg, color, thickness = 1) {
     }
   }
 }
+function drawZ(c, x, y, size, color) {
+  drawLine(c, x, y, x + size, y, color, 1);
+  drawLine(c, x + size, y, x, y + size, color, 1);
+  drawLine(c, x, y + size, x + size, y + size, color, 1);
+}
 
 // --- per-mood art -----------------------------------------------------------
 const CX = 40, CY = 40;
 
-function head(c, color) {
-  fillCircle(c, CX, CY, 30, color);
-  ring(c, CX, CY, 30, C.OUTLINE, 1);
+function creature(c, bodyColor, accent, blink, bellyColor = C.BELLY) {
+  const bob = blink === 1 ? 1 : 0;
+  const tailY = 48 + (blink === 2 ? 2 : 0);
+
+  // Back features first, so the round body naturally hides their bases.
+  fillEllipse(c, 66, tailY, 11, 7, C.OUTLINE);
+  fillEllipse(c, 65, tailY, 8, 5, accent);
+  fillEllipse(c, 27, 67, 9, 5, C.OUTLINE);
+  fillEllipse(c, 53, 67, 9, 5, C.OUTLINE);
+  fillEllipse(c, 27, 66, 7, 4, C.FOOT);
+  fillEllipse(c, 53, 66, 7, 4, C.FOOT);
+
+  fillCircle(c, CX, CY + bob, 31, C.OUTLINE);
+  fillCircle(c, CX, CY + bob, 29, bodyColor);
+  fillEllipse(c, CX, 54 + bob, 15, 12, C.OUTLINE);
+  fillEllipse(c, CX, 53 + bob, 12, 9, bellyColor);
+
+  fillCircle(c, 25, 22 + bob, 7, C.OUTLINE);
+  fillCircle(c, 55, 22 + bob, 7, C.OUTLINE);
+  fillCircle(c, 25, 22 + bob, 4, accent);
+  fillCircle(c, 55, 22 + bob, 4, accent);
+
+  drawLine(c, 38, 14 + bob, 40, 7 + bob, C.OUTLINE, 2);
+  drawLine(c, 42, 14 + bob, 40, 7 + bob, C.OUTLINE, 2);
+  drawLine(c, 39, 13 + bob, 40, 8 + bob, accent, 2);
+  drawLine(c, 41, 13 + bob, 40, 8 + bob, accent, 2);
+
+  drawLine(c, 15, 45 + bob, 9, 51 + bob, C.OUTLINE, 2);
+  drawLine(c, 65, 45 + bob, 71, 51 + bob, C.OUTLINE, 2);
+  fillCircle(c, 10, 52 + bob, 3, accent);
+  fillCircle(c, 70, 52 + bob, 3, accent);
 }
 
 function drawHappy(c, blink) {
-  head(c, C.HEAD_HAPPY);
+  creature(c, C.HEAD_HAPPY, C.CREST_HAPPY, blink);
   // Cheeks
   fillCircle(c, 22, 46, 3, C.CHEEK);
   fillCircle(c, 58, 46, 3, C.CHEEK);
@@ -139,7 +188,7 @@ function drawHappy(c, blink) {
 }
 
 function drawHungry(c, blink) {
-  head(c, C.HEAD_HUNGRY);
+  creature(c, C.HEAD_HUNGRY, C.CREST_HUNGRY, blink);
   // Droopy eyes
   const yE = 36, xL = 28, xR = 52;
   if (blink === 0 || blink === 3) {
@@ -160,7 +209,7 @@ function drawHungry(c, blink) {
 }
 
 function drawSleepy(c, blink) {
-  head(c, C.HEAD_SLEEPY);
+  creature(c, C.HEAD_SLEEPY, C.CREST_SLEEPY, blink, C.BELLY_SLEEPY);
   // Closed eyes (curved lines)
   const yE = 34;
   drawLine(c, 22, yE, 30, yE + 3, C.EYE, 2);
@@ -169,24 +218,21 @@ function drawSleepy(c, blink) {
   drawLine(c, 50, yE + 3, 58, yE, C.EYE, 2);
   // Small relaxed mouth
   drawArc(c, CX, 48, 5, 30, 150, C.MOUTH, 2);
-  // Zzz (faded on mid-blink frames)
-  const zzzAlpha = blink === 1 ? 0 : (blink === 2 ? 0.5 : 1);
-  for (const [x, y, w] of [[66, 18, 1], [70, 12, 1], [74, 6, 1]]) {
-    if (zzzAlpha >= 1) {
-      setPx(c, x, y, C.ZZZ);
-      setPx(c, x + w, y, C.ZZZ);
-    }
+  // Zzz
+  if (blink !== 1) {
+    drawZ(c, 62, 22, 5, C.ZZZ);
+    drawZ(c, 68, 14, 4, C.ZZZ);
   }
 }
 
 function drawSick(c, blink) {
-  head(c, C.HEAD_SICK);
-  // X eyes
-  const yE = 32;
-  for (const cx of [27, 53]) {
-    drawLine(c, cx - 4, yE - 4, cx + 4, yE + 4, C.EYE, 2);
-    drawLine(c, cx + 4, yE - 4, cx - 4, yE + 4, C.EYE, 2);
-  }
+  creature(c, C.HEAD_SICK, C.CREST_SICK, blink);
+  // Grumpy eyes, since activity grumpy maps to this sprite.
+  const yE = 33;
+  drawLine(c, 22, yE - 5, 33, yE - 1, C.EYE, 2);
+  drawLine(c, 47, yE - 1, 58, yE - 5, C.EYE, 2);
+  drawLine(c, 25, yE + 3, 33, yE + 3, C.EYE, 2);
+  drawLine(c, 47, yE + 3, 55, yE + 3, C.EYE, 2);
   // Frown
   drawArc(c, CX, 56, 8, 200, 340, C.MOUTH, 2);
   // Sweat drop (top right)
@@ -212,7 +258,7 @@ const sprites = MOODS.map((mood) =>
 let out = `// Auto-generated by tools/generate-sprites.mjs — do not edit by hand.
 // 16 sprites: 4 moods (happy, hungry, sleepy, sick) x ${FRAMES} blink frames.
 // ${W}x${H} RGB565 each. Index = mood * ${FRAMES} + frame.
-// Pixels outside the head circle are 0x0000 (matches the disc BG).
+// Pixels outside the pet silhouette are 0x0000 (matches the disc BG).
 // Total size: ${(16 * W * H * 2 / 1024).toFixed(1)} KB, lives in flash (PROGMEM).
 
 #pragma once

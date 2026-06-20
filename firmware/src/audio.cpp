@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "device_settings.h"
 #include <M5Unified.h>
 #include <esp_heap_caps.h>
 #include <math.h>
@@ -12,7 +13,23 @@ static uint32_t s_startMs = 0;
 static uint32_t s_maxSeconds = DEFAULT_SECONDS;
 static bool s_recording = false;
 static bool s_micActive = false;
+static uint8_t s_volumePercent = device_settings::VOLUME_PERCENT_DEFAULT;
 static CaptureStats s_lastStats = {};
+
+static constexpr uint32_t SLOT_MS = (SLOT_SAMPLES * 1000UL) / SAMPLE_RATE;
+static constexpr uint32_t PRE_ROLL_MS = 300;
+static constexpr uint32_t TRAIL_MS = 250;
+static constexpr uint32_t SILENCE_AUTO_STOP_MS = 900;
+static constexpr uint32_t MIN_SPEECH_MS = 300;
+static constexpr uint32_t VOICE_RMS_THRESHOLD = 220;
+static constexpr uint32_t VOICE_PEAK_THRESHOLD = 1000;
+
+static uint32_t s_analyzedSlots = 0;
+static uint32_t s_firstVoiceSlot = 0;
+static uint32_t s_lastVoiceSlot = 0;
+static uint32_t s_voiceSlots = 0;
+static bool s_seenVoice = false;
+static bool s_autoStopReady = false;
 
 // WAV lives in PSRAM; we keep the assembled file alive until the next start.
 static uint8_t* s_wav = nullptr;
@@ -33,11 +50,68 @@ static uint32_t maxSlots() {
     return SLOTS_PER_SECOND * s_maxSeconds;
 }
 
-static void updateStats(size_t totalSamples) {
+static uint32_t slotsForMs(uint32_t ms) {
+    return (ms + SLOT_MS - 1) / SLOT_MS;
+}
+
+static void analyzeSlot(uint32_t slotIdx) {
+    if (!s_pcm || slotIdx >= maxSlots()) return;
+    const int16_t* slot = s_pcm + slotIdx * SLOT_SAMPLES;
+    uint32_t peakAbs = 0;
+    uint64_t sumSquares = 0;
+    for (size_t i = 0; i < SLOT_SAMPLES; ++i) {
+        const int16_t v = slot[i];
+        const int32_t absV = v < 0 ? -(int32_t)v : (int32_t)v;
+        if ((uint32_t)absV > peakAbs) peakAbs = (uint32_t)absV;
+        sumSquares += (uint64_t)absV * (uint64_t)absV;
+    }
+    const uint32_t rms = (uint32_t)sqrt((double)sumSquares / (double)SLOT_SAMPLES);
+    const bool voiced = rms >= VOICE_RMS_THRESHOLD || peakAbs >= VOICE_PEAK_THRESHOLD;
+    if (voiced) {
+        if (!s_seenVoice) {
+            const uint32_t preSlots = slotsForMs(PRE_ROLL_MS);
+            s_firstVoiceSlot = slotIdx > preSlots ? slotIdx - preSlots : 0;
+            s_seenVoice = true;
+        }
+        s_lastVoiceSlot = slotIdx;
+        s_voiceSlots++;
+    }
+
+    if (s_seenVoice) {
+        const uint32_t silenceSlots = slotIdx > s_lastVoiceSlot ? slotIdx - s_lastVoiceSlot : 0;
+        const uint32_t speechMs = s_voiceSlots * SLOT_MS;
+        if (speechMs >= MIN_SPEECH_MS && silenceSlots * SLOT_MS >= SILENCE_AUTO_STOP_MS) {
+            s_autoStopReady = true;
+        }
+    }
+}
+
+static void analyzeCompletedSlots() {
+    if (!s_recording || !s_micActive) return;
+    const int pending = M5.Mic.isRecording();
+    uint32_t safeSlots = s_slotIdx;
+    if (pending > 0 && safeSlots > (uint32_t)pending) {
+        safeSlots -= (uint32_t)pending;
+    } else if (pending > 0) {
+        safeSlots = 0;
+    }
+    while (s_analyzedSlots < safeSlots) {
+        analyzeSlot(s_analyzedSlots++);
+    }
+}
+
+static void updateStats(size_t rawSamples, size_t startSample, size_t totalSamples, bool enoughSpeech) {
     s_lastStats = {};
+    s_lastStats.rawSamples = rawSamples;
+    s_lastStats.rawDurationMs = (uint32_t)((rawSamples * 1000UL) / SAMPLE_RATE);
     s_lastStats.slots = s_slotIdx;
     s_lastStats.samples = totalSamples;
     s_lastStats.durationMs = (uint32_t)((totalSamples * 1000UL) / SAMPLE_RATE);
+    s_lastStats.trimStartMs = (uint32_t)((startSample * 1000UL) / SAMPLE_RATE);
+    s_lastStats.speechMs = s_voiceSlots * SLOT_MS;
+    s_lastStats.voiceSlots = s_voiceSlots;
+    s_lastStats.speechDetected = enoughSpeech;
+    s_lastStats.trimmed = startSample > 0 || totalSamples < rawSamples;
     if (!s_pcm || totalSamples == 0) return;
 
     int16_t minSample = INT16_MAX;
@@ -45,10 +119,10 @@ static void updateStats(size_t totalSamples) {
     uint32_t peakAbs = 0;
     uint32_t zeroCrossings = 0;
     uint64_t sumSquares = 0;
-    int16_t prev = s_pcm[0];
+    int16_t prev = s_pcm[startSample];
 
     for (size_t i = 0; i < totalSamples; ++i) {
-        int16_t v = s_pcm[i];
+        int16_t v = s_pcm[startSample + i];
         if (v < minSample) minSample = v;
         if (v > maxSample) maxSample = v;
         int32_t absV = v < 0 ? -(int32_t)v : (int32_t)v;
@@ -103,11 +177,18 @@ void init() {
     }
     // Start with the speaker enabled so we can chirp without setup.
     M5.Speaker.begin();
+    M5.Speaker.setVolume(device_settings::volumeToHardware(s_volumePercent));
 }
 
 void startRecording(uint32_t maxSeconds) {
     s_maxSeconds = clampSeconds(maxSeconds);
     s_slotIdx = 0;
+    s_analyzedSlots = 0;
+    s_firstVoiceSlot = 0;
+    s_lastVoiceSlot = 0;
+    s_voiceSlots = 0;
+    s_seenVoice = false;
+    s_autoStopReady = false;
     s_startMs = millis();
     s_wavSize = 0;
     muxToMic();
@@ -124,6 +205,7 @@ int pumpRecording() {
         s_slotIdx++;
         queued++;
     }
+    analyzeCompletedSlots();
     return queued;
 }
 
@@ -141,16 +223,36 @@ uint32_t maxDurationSeconds() {
     return s_maxSeconds;
 }
 
+bool autoStopReady() {
+    analyzeCompletedSlots();
+    return s_autoStopReady;
+}
+
 bool stopRecording(const uint8_t** wavOut, size_t* sizeOut) {
-    s_recording = false;
     if (M5.Mic.isRecording()) {
         while (M5.Mic.isRecording()) delay(5);
     }
+    while (s_analyzedSlots < s_slotIdx) {
+        analyzeSlot(s_analyzedSlots++);
+    }
+    s_recording = false;
     muxToSpeaker();
 
-    size_t totalSamples = s_slotIdx * SLOT_SAMPLES;
-    updateStats(totalSamples);
-    if (totalSamples == 0) {
+    const size_t rawSamples = s_slotIdx * SLOT_SAMPLES;
+    const bool enoughSpeech = s_seenVoice && s_voiceSlots * SLOT_MS >= MIN_SPEECH_MS;
+    size_t startSlot = 0;
+    size_t endSlot = s_slotIdx;
+    if (enoughSpeech) {
+        startSlot = s_firstVoiceSlot;
+        const size_t trailSlots = slotsForMs(TRAIL_MS);
+        endSlot = (size_t)s_lastVoiceSlot + trailSlots + 1;
+        if (endSlot > s_slotIdx) endSlot = s_slotIdx;
+        if (endSlot <= startSlot) endSlot = startSlot + 1;
+    }
+    const size_t startSample = startSlot * SLOT_SAMPLES;
+    const size_t totalSamples = (endSlot - startSlot) * SLOT_SAMPLES;
+    updateStats(rawSamples, startSample, totalSamples, enoughSpeech);
+    if (rawSamples == 0 || totalSamples == 0) {
         *wavOut = nullptr;
         *sizeOut = 0;
         return false;
@@ -171,7 +273,7 @@ bool stopRecording(const uint8_t** wavOut, size_t* sizeOut) {
     writeLe16(h + 32, 2);         // block align
     writeLe16(h + 34, 16);        // bits per sample
     memcpy(h + 36, "data", 4);    writeLe32(h + 40, dataBytes);
-    memcpy(h + 44, s_pcm, dataBytes);
+    memcpy(h + 44, s_pcm + startSample, dataBytes);
 
     s_wavSize = 44 + dataBytes;
     *wavOut = s_wav;
@@ -186,15 +288,31 @@ void cancelRecording() {
     }
     muxToSpeaker();
     s_slotIdx = 0;
+    s_analyzedSlots = 0;
+    s_voiceSlots = 0;
+    s_seenVoice = false;
+    s_autoStopReady = false;
     s_wavSize = 0;
 }
 
 void chirp(uint16_t freqHz, uint16_t ms) {
     muxToSpeaker();
+    M5.Speaker.setVolume(device_settings::volumeToHardware(s_volumePercent));
     M5.Speaker.tone(freqHz, ms);
 }
 
+void setVolumePercent(uint8_t volumePercent) {
+    s_volumePercent = device_settings::clampPercent(volumePercent);
+    if (M5.Speaker.isEnabled()) {
+        M5.Speaker.setVolume(device_settings::volumeToHardware(s_volumePercent));
+    }
+}
+
+uint8_t volumePercent() { return s_volumePercent; }
+
 bool micActive() { return s_micActive; }
+
+bool lastClipHasSpeech() { return s_lastStats.speechDetected; }
 
 const CaptureStats& lastStats() { return s_lastStats; }
 

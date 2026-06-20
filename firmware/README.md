@@ -18,7 +18,7 @@ cd ..
 
 ```sh
 cp src/secrets.h.example src/secrets.h
-# then edit secrets.h with your real WiFi + the bridge's DEVICE_TOKEN
+# then edit secrets.h with your ordered WiFi networks + the bridge's DEVICE_TOKEN
 ```
 
 ### 3. Set `PROXY_URL`
@@ -84,20 +84,20 @@ firmware/
 
 When booted, the StopWatch:
 
-1. Connects to WiFi.
+1. Connects to the first visible saved WiFi network in `secrets.h`.
 2. Pings the bridge at `PROXY_URL` to confirm it can reach the LAN.
 3. Polls `GET /pet/state` every 30 s and renders the pet face on the round AMOLED (yellow happy / orange hungry / blue sleepy / green sick, with a 4-frame blink animation).
 4. **KEYA short** while idle opens the device-only transcript history.
 5. **KEYB short** while idle enters voice input mode without recording.
-6. **KEYB short** or tapping the mic starts recording from the MEMS mic. The top of the disc shows `REC` + elapsed seconds + a pulsing red bar. **KEYB short** or tapping the mic while recording stops and sends the clip; recording also auto-stops at the selected duration, 10 s by default. **KEYA** cancels recording and returns to the pet without uploading.
-7. When recording completes, the firmware muxes the captured PCM into a 16 kHz/16-bit/mono WAV and POSTs it as `audio/wav` to `PROXY_URL/transcribe`.
+6. **KEYB short** or tapping the mic starts recording from the MEMS mic. The top of the disc shows `REC` + elapsed seconds + a pulsing red bar. In Auto voice mode, the recorder trims silence and sends after a detected pause; fixed 10/20/30 s caps are still available. **KEYB short** or tapping the mic while recording sends immediately. **KEYA** cancels recording and returns to the pet without uploading.
+7. When recording completes, the firmware trims the captured PCM to the detected speech window, muxes it into a 16 kHz/16-bit/mono WAV, and POSTs it as `audio/wav` to `PROXY_URL/transcribe`. Quiet clips are rejected locally without uploading.
 8. The bridge forwards the audio to Groq Whisper and returns `{text, duration_s, lang, ms_groq}`. The firmware stores successful transcripts on the device only for 7 days, capped at 30 entries, then shows the latest transcript word-wrapped across pages; press A or tap the screen to page, B to dismiss.
-9. A short chirp plays for success, a longer low chirp for failure, plus a vibration buzz on success. A `?` icon shows when the bridge is unreachable.
+9. A short chirp plays for success, a longer low chirp for failure, plus a vibration buzz on success. Sound, volume, brightness, vibration, voice mode, auto-dim, and battery warnings are device settings. A `?` icon shows when the bridge is unreachable.
 10. Polling the bridge every 30 s in the background keeps the mood and food count fresh.
 11. On boot, if the bridge has a `last_msg` from a previous session, it's shown for 3 s as a "last heard:" greeting.
 12. **KEYB hold** or tapping the outer home ring while idle opens stats view (mood, food today, total tokens, audio runs, WiFi RSSI, bridge host). **KEYA short**, tap, or timeout returns home.
 13. **KEYB short** while stats opens the reset confirm prompt; **KEYB short** or tapping no cancels; **KEYA short** or tapping yes posts `/pet/reset` (new birth time, clear `last_msg`, zero today's audio runs). A success chirp + buzz confirms.
-14. **KEYA + KEYB hold** from pet, voice idle, or stats opens recording-duration settings. Tap 10/20/30 seconds directly, then the watch shows a brief saved confirmation before returning to the pet. Use **KEYB short** to cycle and **KEYA short** to return to the pet.
+14. **KEYA + KEYB hold** from pet, voice idle, or stats opens device settings. The settings menu includes Auto/10/20/30 s voice mode, brightness, volume, feedback, auto-dim, and battery status. Use touch to open visible setting chips, **KEYB short** to cycle focus or values, **KEYB hold** to open/return from a selected item, and **KEYA short** to go back or return to the pet.
 15. In transcript history, use **KEYB short** to move older, **KEYA short** or tap to open the selected transcript, **KEYB short** inside a transcript to return to the list, and **KEYB hold** from the list to return to the pet.
 
 ## Buttons
@@ -114,12 +114,15 @@ When booted, the StopWatch:
 | **KEYA short**          | settings       | back to idle (pet face)                                                |
 | **KEYA short**          | stats          | back to idle (pet face)                                                |
 | **KEYA short**          | error          | dismiss error                                                          |
-| **KEYA + KEYB hold**    | idle/voice/stats | open recording-duration settings                                     |
+| **KEYA + KEYB hold**    | idle/voice/stats | open device settings                                                  |
 | **KEYB short**          | idle           | enter voice input mode, no recording                                  |
 | **KEYB short**          | voice          | start recording                                                        |
 | **KEYB short**          | recording      | stop recording → POST `/transcribe`                                   |
 | **KEYB hold**           | idle           | show stats view                                                        |
-| **KEYB short**          | settings       | cycle recording duration: 10 s → 20 s → 30 s                           |
+| **KEYB short**          | settings menu  | move selected settings item                                            |
+| **KEYB hold**           | settings menu  | open selected settings item                                            |
+| **KEYB short**          | settings item  | cycle/change the visible setting                                       |
+| **KEYB hold**           | settings item  | return to settings menu                                                |
 | **KEYB short**          | stats          | show confirm prompt                                                    |
 | **KEYB short**          | confirm        | cancel confirm → back to stats                                         |
 | **KEYB short**          | showing        | dismiss transcript → back to idle                                      |
@@ -132,7 +135,8 @@ When booted, the StopWatch:
 | **touch tap**           | recording mic  | stop recording → POST `/transcribe`                                    |
 | **touch tap**           | stats          | back to idle (pet face)                                                |
 | **touch tap**           | confirm yes/no | confirm reset or cancel back to stats                                  |
-| **touch tap**           | settings       | select tapped duration → show saved confirmation → back to idle         |
+| **touch tap**           | settings menu  | open tapped settings item                                              |
+| **touch tap**           | settings item  | change tapped setting or refresh battery status                        |
 | **touch tap**           | showing        | next transcript page                                                   |
 | **touch tap**           | history list   | open selected history entry                                            |
 | **touch tap**           | history entry  | next transcript page                                                   |

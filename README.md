@@ -109,7 +109,7 @@ You’ll paste the selected URL into firmware `src/config.h` in step 3.
 ```sh
 cd firmware
 cp src/secrets.h.example src/secrets.h
-# edit src/secrets.h with your WiFi SSID, password, and the bridge's DEVICE_TOKEN
+# edit src/secrets.h with your ordered WiFi networks and the bridge's DEVICE_TOKEN
 # edit src/config.h to set PROXY_URL to your selected backend URL
 ```
 
@@ -137,9 +137,12 @@ green LED is solid), then:
 | Return home from stats                  | tap the stats screen or short-press KEYA       |
 | Reset the pet (new birth, clear chat)   | stats → KEYB → KEYA, or tap yes in confirm     |
 | Enter voice input mode                  | short-press KEYB                               |
-| Record and send voice                   | short-press KEYB or tap mic, then KEYB/tap mic |
+| Record and send voice                   | KEYB/tap mic; Auto sends after a voice pause   |
 | Cancel voice recording                  | press KEYA while recording                     |
-| Change recording duration               | hold KEYA + KEYB, then tap 10/20/30 s          |
+| Open device settings                    | hold KEYA + KEYB from pet, voice, or stats     |
+| Change voice mode                       | settings → Voice → tap Auto/10/20/30 s         |
+| Adjust brightness / volume / feedback   | settings → Bright / Volume / Feed              |
+| Check battery / warnings                | settings → Batt                                |
 | Page through the transcript              | short-press KEYA or tap the screen while reading|
 | Dismiss the transcript                  | short-press KEYB                                |
 
@@ -216,7 +219,7 @@ end so it leaves no side effects.
 |--------------------------------------------------|--------------------------------------------------------------------------------------|
 | `PlatformIO requires Python 3.10–3.13`           | Use `./tools/pio` from the repo root; it runs PlatformIO through `uv` with Python 3.12 |
 | `/transcribe → 503`                              | Add `GROQ_API_KEY` to `bridge/.env`; the bridge doesn’t crash, it just refuses       |
-| Watch stuck on `wifi failed`                     | Wrong SSID/pass in `secrets.h`; the 2.4 GHz radio only (no 5 GHz)                     |
+| Watch stuck on `wifi failed`                     | No saved SSID is visible, wrong password in `secrets.h`, or a non-2.4 GHz network     |
 | `bridge down` icon on the watch                 | `ping <PROXY_URL host>` from the watch’s WiFi; check `bridge/bridge.log`             |
 | Pet stuck on the same mood for hours            | `codex` / `claude` rollouts are at the wrong path; check the paths in the bridge     |
 | Sprites look wrong on the device                 | Regenerate with `node tools/generate-sprites.mjs`, re-flash, eyeball `/tmp/pet-sprites/` |
