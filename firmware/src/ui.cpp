@@ -20,10 +20,10 @@ static constexpr uint16_t MOOD_SICK   = 0xF800;  // red
 static constexpr uint16_t RING_DIM    = 0x3186;  // dark grey
 static constexpr uint16_t CHIP_BG     = 0x0841;  // near-black blue/grey
 
-static constexpr uint8_t HOME_PET_SCALE = 2;
-static constexpr int HOME_RING_R = 218;
-static constexpr int HOME_RING_THICKNESS = 7;
-static constexpr int VOICE_BUTTON_R = 92;
+static constexpr uint8_t HOME_PET_SCALE = TOKENGOCHI_HOME_PET_SCALE;
+static constexpr int HOME_RING_R = TOKENGOCHI_COMPACT_UI ? 62 : 218;
+static constexpr int HOME_RING_THICKNESS = TOKENGOCHI_COMPACT_UI ? 4 : 7;
+static constexpr int VOICE_BUTTON_R = TOKENGOCHI_COMPACT_UI ? 38 : 92;
 static constexpr float DEG_TO_RAD_F = 0.01745329252f;
 
 static M5Canvas g_canvas(&M5.Display);
@@ -61,10 +61,15 @@ static void applyDiscClip() {
 }
 
 static int chordWidthAtYRaw(int y) {
+#if TOKENGOCHI_COMPACT_UI
+    (void)y;
+    return SCREEN_W;
+#else
     const float dy = (float)y - (float)SCREEN_CY;
     const float r = (float)SCREEN_R;
     if (fabsf(dy) >= r) return 0;
     return (int)(sqrtf(r * r - dy * dy) * 2.0f);
+#endif
 }
 
 static int safeWidthAtY(int y, int pad) {
@@ -251,8 +256,10 @@ bool writeScreenshot(Stream& out) {
 
 void clearToBlack() {
     target().fillScreen(BG);
+#if !TOKENGOCHI_COMPACT_UI
     // Re-paint the disc area only (already black) so we don't see chassis pixels.
     target().fillCircle(SCREEN_CX, SCREEN_CY, SCREEN_R, BG);
+#endif
     flush();
 }
 
@@ -432,6 +439,76 @@ static void drawAwakePanel(const PetState& s) {
     drawCenteredBoxText(SCREEN_CX, y + 82, 2, awake, stage, w - 48);
 }
 
+#if TOKENGOCHI_COMPACT_UI
+static void compactText(int x, int y, int size, uint16_t color, const char* text, int maxWidth, uint16_t bg = BG) {
+    if (!text) return;
+    char line[80];
+    strncpy(line, text, sizeof(line) - 1);
+    line[sizeof(line) - 1] = '\0';
+    target().setTextSize(size);
+    target().setTextColor(color, bg);
+    truncateToWidth(line, sizeof(line), maxWidth);
+    target().setCursor(x, y);
+    target().print(line);
+}
+
+static void compactCentered(int y, int size, uint16_t color, const char* text, int maxWidth = SCREEN_W - 8, uint16_t bg = BG) {
+    if (!text) return;
+    char line[80];
+    strncpy(line, text, sizeof(line) - 1);
+    line[sizeof(line) - 1] = '\0';
+    target().setTextSize(size);
+    target().setTextColor(color, bg);
+    truncateToWidth(line, sizeof(line), maxWidth);
+    const int w = target().textWidth(line);
+    target().setCursor(SCREEN_CX - w / 2, y);
+    target().print(line);
+}
+
+static void compactBar(int x, int y, int w, int h, int progressX1000, uint16_t color) {
+    if (progressX1000 < 0) progressX1000 = 0;
+    if (progressX1000 > 1000) progressX1000 = 1000;
+    target().fillRoundRect(x, y, w, h, h / 2, CHIP_BG);
+    const int filled = (w * progressX1000) / 1000;
+    if (filled > 0) {
+        target().fillRoundRect(x, y, filled, h, h / 2, color);
+    }
+    target().drawRoundRect(x, y, w, h, h / 2, RING_DIM);
+}
+
+static void compactPill(int x, int y, int w, int h, const char* label, uint16_t color, bool selected = false) {
+    const uint16_t fill = selected ? 0x0340 : BG;
+    target().fillRoundRect(x, y, w, h, 7, fill);
+    target().drawRoundRect(x, y, w, h, 7, selected ? color : RING_DIM);
+    char line[40];
+    strncpy(line, label ? label : "", sizeof(line) - 1);
+    line[sizeof(line) - 1] = '\0';
+    target().setTextSize(1);
+    target().setTextColor(selected ? color : FG, fill);
+    truncateToWidth(line, sizeof(line), w - 6);
+    const int tw = target().textWidth(line);
+    target().setCursor(x + (w - tw) / 2, y + 5);
+    target().print(line);
+}
+
+static void compactHint(const char* text) {
+    target().fillRect(0, SCREEN_H - 15, SCREEN_W, 15, BG);
+    compactCentered(SCREEN_H - 13, 1, DIM, text, SCREEN_W - 6);
+}
+
+static int compactProgressForState(const PetState& s) {
+    if (hasCodexAccountUsage(s)) {
+        int progress = s.codex_usage_percent_x10;
+        if (progress < 0) progress = 0;
+        if (progress > 1000) progress = 1000;
+        return progress;
+    }
+    if (s.food_today <= 0) return 80;
+    if (s.food_today >= 50000) return 1000;
+    return (int)((s.food_today * 1000L) / 50000L);
+}
+#endif
+
 void drawStatus(const PetState& s, bool wifiUp, bool bridgeUp) {
     char line[64];
     bool showFoodLabel = false;
@@ -461,6 +538,13 @@ void drawStatus(const PetState& s, bool wifiUp, bool bridgeUp) {
         snprintf(line, sizeof(line), "%ldk tk", (long)(s.food_today / 1000));
         showFoodLabel = true;
     }
+#if TOKENGOCHI_COMPACT_UI
+    (void)showFoodLabel;
+    target().fillRect(0, 0, SCREEN_W, 18, BG);
+    compactCentered(3, 1, wifiUp && bridgeUp ? FG : DIM, line, SCREEN_W - 6);
+    flush();
+    return;
+#else
     if (showFoodLabel) {
         drawCenteredSafeText(18, 1, DIM, "FOOD", 66);
         drawCenteredSafeText(32, 2, wifiUp && bridgeUp ? FG : DIM, line, 66);
@@ -468,10 +552,33 @@ void drawStatus(const PetState& s, bool wifiUp, bool bridgeUp) {
         drawCenteredSafeText(28, 2, wifiUp && bridgeUp ? FG : DIM, line, 56);
     }
     flush();
+#endif
 }
 
 void drawMood(const PetState& s) {
     const uint16_t accent = moodColor(s.mood);
+#if TOKENGOCHI_COMPACT_UI
+    pet_sprite::drawCentered(pet_sprite::moodIndex(s.mood),
+                             pet_sprite::currentFrame(),
+                             HOME_PET_SCALE);
+
+    compactBar(8, 20, SCREEN_W - 16, 7, compactProgressForState(s), accent);
+
+    char line[32];
+    formatHomeFoodLabel(line, sizeof(line), s);
+    compactText(5, 34, 1, FG, line, 55);
+    compactText(SCREEN_W - 58, 34, 1, accent, s.mood, 54);
+    if (hasActivity(s)) {
+        char idle[24];
+        formatIdleLabel(idle, sizeof(idle), s);
+        compactText(5, 54, 1, activityColor(s), idle, 52);
+    } else if (s.last_msg[0]) {
+        compactText(5, 54, 1, DIM, s.last_msg, 52);
+    }
+    compactHint("A history  B voice  hold B stats");
+    flush();
+    return;
+#else
     int progressX1000 = -1;
     if (hasCodexAccountUsage(s)) {
         progressX1000 = s.codex_usage_percent_x10;
@@ -502,9 +609,19 @@ void drawMood(const PetState& s) {
         drawCenteredSafeText(374, 2, DIM, sub, 76);
     }
     flush();
+#endif
 }
 
 void drawOffline(const char* reason) {
+#if TOKENGOCHI_COMPACT_UI
+    compactCentered(44, 2, MOOD_SICK, "api ?", SCREEN_W - 8);
+    if (reason) {
+        compactCentered(75, 1, DIM, reason, SCREEN_W - 8);
+    }
+    compactHint("retrying");
+    flush();
+    return;
+#else
     drawArcDots(HOME_RING_R, -90, 270, RING_DIM, HOME_RING_THICKNESS, 12);
     drawArcDots(HOME_RING_R, -70, -20, MOOD_SICK, HOME_RING_THICKNESS, 4);
     drawArcDots(HOME_RING_R, 110, 160, MOOD_SICK, HOME_RING_THICKNESS, 4);
@@ -513,6 +630,7 @@ void drawOffline(const char* reason) {
         drawCenteredSafeText(SCREEN_CY + 20, 2, DIM, reason, 70);
     }
     flush();
+#endif
 }
 
 // ---------------------------------------------------------------- pager ------
@@ -527,15 +645,23 @@ static size_t       s_pageStarts[12];
 static int          s_pageIndex = 0;
 static int          s_pageCount = 0;
 
-static constexpr int TRANSCRIPT_LINE_H = 24;
-static constexpr int TRANSCRIPT_SIDE_PAD = 20;
+static constexpr int TRANSCRIPT_LINE_H = TOKENGOCHI_COMPACT_UI ? 15 : 24;
+static constexpr int TRANSCRIPT_SIDE_PAD = TOKENGOCHI_COMPACT_UI ? 6 : 20;
 static constexpr int TRANSCRIPT_BOTTOM_Y = SCREEN_H - 46;
 
 static int transcriptTopY() {
+#if TOKENGOCHI_COMPACT_UI
+    return s_pageTitle[0] ? 24 : 20;
+#else
     return s_pageTitle[0] ? 66 : 54;
+#endif
 }
 
 static int chordWidthAtY(int y) {
+#if TOKENGOCHI_COMPACT_UI
+    (void)y;
+    return SCREEN_W - TRANSCRIPT_SIDE_PAD * 2;
+#else
     const float sampleY = (float)y + (float)TRANSCRIPT_LINE_H * 0.5f;
     const float dy = sampleY - (float)SCREEN_CY;
     const float r = (float)SCREEN_R;
@@ -549,12 +675,13 @@ static int chordWidthAtY(int y) {
         width = SCREEN_W - TRANSCRIPT_SIDE_PAD * 2;
     }
     return width;
+#endif
 }
 
 static int maxCharsForY(int y) {
-    target().setTextSize(2);
+    target().setTextSize(TOKENGOCHI_COMPACT_UI ? 1 : 2);
     int charW = target().textWidth("M");
-    if (charW <= 0) charW = 12;
+    if (charW <= 0) charW = TOKENGOCHI_COMPACT_UI ? 6 : 12;
     int chars = chordWidthAtY(y) / charW;
     if (chars < 10) chars = 10;
     if (chars > 60) chars = 60;
@@ -651,23 +778,31 @@ void pageReset() {
 static void renderTranscriptPage() {
     if (!s_showingTranscript || !s_pageText) return;
 
+#if TOKENGOCHI_COMPACT_UI
+    if (s_pageCount > 1) {
+        compactBar(8, 18, SCREEN_W - 16, 5,
+                   ((s_pageIndex + 1) * 1000) / s_pageCount,
+                   0x87F0);
+    }
+#else
     if (s_pageCount > 1) {
         drawCircularProgress(HOME_RING_R,
                              ((s_pageIndex + 1) * 1000) / s_pageCount,
                              0x87F0,
                              4);
     }
+#endif
 
-    target().setTextSize(2);
+    target().setTextSize(TOKENGOCHI_COMPACT_UI ? 1 : 2);
     target().setTextColor(FG, BG);
 
     if (s_pageTitle[0]) {
         target().setTextSize(1);
         target().setTextColor(DIM, BG);
         int w = target().textWidth(s_pageTitle);
-        target().setCursor(SCREEN_CX - w / 2, 46);
+        target().setCursor(SCREEN_CX - w / 2, TOKENGOCHI_COMPACT_UI ? 7 : 46);
         target().print(s_pageTitle);
-        target().setTextSize(2);
+        target().setTextSize(TOKENGOCHI_COMPACT_UI ? 1 : 2);
         target().setTextColor(FG, BG);
     }
 
@@ -721,7 +856,7 @@ static void renderTranscriptPage() {
         snprintf(hint, sizeof(hint), "B: done");
     }
     int w = target().textWidth(hint);
-    target().setCursor(SCREEN_CX - w / 2, SCREEN_H - 24);
+    target().setCursor(SCREEN_CX - w / 2, TOKENGOCHI_COMPACT_UI ? SCREEN_H - 13 : SCREEN_H - 24);
     target().print(hint);
     flush();
 }
@@ -773,6 +908,23 @@ void drawTranscript(const char* text, const char* title, const char* footer) {
 }
 
 void drawHistoryList(size_t count, size_t selectedIndex, const char* meta, const char* preview) {
+#if TOKENGOCHI_COMPACT_UI
+    compactCentered(5, 1, 0x87F0, "HISTORY", SCREEN_W - 8);
+    if (count == 0) {
+        compactCentered(48, 1, DIM, "no transcripts", SCREEN_W - 8);
+        compactHint("A pet");
+        flush();
+        return;
+    }
+    char pos[24];
+    snprintf(pos, sizeof(pos), "%u/%u", (unsigned)(selectedIndex + 1), (unsigned)count);
+    compactText(8, 25, 1, FG, pos, 45);
+    compactText(58, 25, 1, DIM, meta ? meta : "", SCREEN_W - 66);
+    compactText(8, 48, 1, FG, preview ? preview : "", SCREEN_W - 16);
+    compactHint("A open  B older");
+    flush();
+    return;
+#else
     drawArcDots(HOME_RING_R, -90, 270, RING_DIM, HOME_RING_THICKNESS, 12);
     drawCenteredSafeText(52, 3, 0x87F0, "HISTORY", 78);
 
@@ -827,10 +979,16 @@ void drawHistoryList(size_t count, size_t selectedIndex, const char* meta, const
 
     drawHintLine("A open  |  B older");
     flush();
+#endif
 }
 
 // ---------------------------------------------------------------- recording --
 void drawArming() {
+#if TOKENGOCHI_COMPACT_UI
+    compactCentered(55, 1, DIM, "getting ready", SCREEN_W - 8);
+    flush();
+    return;
+#else
     target().setTextSize(2);
     target().setTextColor(DIM, BG);
     const char* label = "getting ready";
@@ -838,15 +996,24 @@ void drawArming() {
     target().setCursor(SCREEN_CX - w / 2, SCREEN_CY - 12);
     target().print(label);
     flush();
+#endif
 }
 
 void drawVoiceReady() {
+#if TOKENGOCHI_COMPACT_UI
+    compactCentered(7, 1, 0x87F0, "VOICE", SCREEN_W - 8);
+    drawMicIcon(SCREEN_CX, SCREEN_CY, 0x87F0, 0x0208);
+    compactHint("A pet  B record");
+    flush();
+    return;
+#else
     drawArcDots(HOME_RING_R, -60, 240, RING_DIM, HOME_RING_THICKNESS, 8);
     drawCenteredSafeText(54, 3, 0x87F0, "VOICE", 80);
     drawMicIcon(SCREEN_CX, SCREEN_CY + 18, 0x87F0, 0x0208);
     drawCenteredSafeText(SCREEN_CY + 132, 1, DIM, "tap mic or B", 64);
     drawHintLine("A: pet");
     flush();
+#endif
 }
 
 static void drawSettingsChrome(const char* title, const char* subtitle = nullptr) {
@@ -940,6 +1107,18 @@ static const char* feedbackValue(const device_settings::Settings& settings) {
 }
 
 void drawDurationSettings(uint32_t selectedSeconds, bool autoMode) {
+#if TOKENGOCHI_COMPACT_UI
+    compactCentered(5, 1, 0x87F0, "VOICE MODE", SCREEN_W - 8);
+    static constexpr uint32_t OPTIONS[] = {0, 10, 20, 30};
+    static constexpr const char* LABELS[] = {"AUTO", "10s", "20s", "30s"};
+    for (size_t i = 0; i < sizeof(OPTIONS) / sizeof(OPTIONS[0]); ++i) {
+        const bool selected = OPTIONS[i] == 0 ? autoMode : (!autoMode && selectedSeconds == OPTIONS[i]);
+        compactPill(8 + (int)i * 58, 45, 52, 26, LABELS[i], 0x07E0, selected);
+    }
+    compactHint("B cycle  A back");
+    flush();
+    return;
+#else
     drawSettingsChrome("VOICE", "auto trims silence");
 
     static constexpr uint32_t OPTIONS[] = {0, 10, 20, 30};
@@ -967,9 +1146,18 @@ void drawDurationSettings(uint32_t selectedSeconds, bool autoMode) {
     drawCenteredSafeText(340, 1, DIM, "auto stops after your voice", 54);
     drawHintLine("tap option | B next");
     flush();
+#endif
 }
 
 void drawDurationSaved(uint32_t selectedSeconds) {
+#if TOKENGOCHI_COMPACT_UI
+    char label[16];
+    snprintf(label, sizeof(label), "%lus", (unsigned long)selectedSeconds);
+    compactCentered(35, 2, 0x07E0, label, SCREEN_W - 8);
+    compactCentered(72, 1, FG, "ready", SCREEN_W - 8);
+    flush();
+    return;
+#else
     drawSettingsChrome("SAVED", "voice duration");
 
     target().setTextSize(5);
@@ -982,12 +1170,35 @@ void drawDurationSaved(uint32_t selectedSeconds) {
 
     drawCenteredSafeText(SCREEN_CY + 58, 2, FG, "ready", 76);
     flush();
+#endif
 }
 
 void drawSettingsMenu(const device_settings::Settings& settings,
                       const battery_status::Snapshot& battery,
                       battery_status::WarningState warning,
                       uint8_t selectedIndex) {
+#if TOKENGOCHI_COMPACT_UI
+    compactCentered(5, 1, 0x87F0, "SETTINGS", SCREEN_W - 8);
+    char values[6][14];
+    snprintf(values[0], sizeof(values[0]), "%s", device_settings::recordModeLabel(settings));
+    snprintf(values[1], sizeof(values[1]), "screen %u%%", (unsigned)settings.brightnessPercent);
+    snprintf(values[2], sizeof(values[2]), "vol %u%%", (unsigned)settings.volumePercent);
+    snprintf(values[3], sizeof(values[3]), "%s", feedbackValue(settings));
+    snprintf(values[4], sizeof(values[4]), "dim %s", device_settings::autoDimLabel(settings));
+    formatBatteryPercent(values[5], sizeof(values[5]), battery);
+    static constexpr const char* LABELS[] = {"Voice", "Screen", "Volume", "Feel", "Dim", "Battery"};
+    for (uint8_t i = 0; i < 6; ++i) {
+        const int col = i % 3;
+        const int row = i / 3;
+        char label[24];
+        snprintf(label, sizeof(label), "%s %s", LABELS[i], values[i]);
+        uint16_t accent = i == 5 && battery_status::isWarning(warning) ? MOOD_HUNGRY : 0x07E0;
+        compactPill(7 + col * 78, 32 + row * 32, 72, 25, label, accent, selectedIndex == i);
+    }
+    compactHint("B next  hold B open  A pet");
+    flush();
+    return;
+#else
     drawSettingsChrome("SETTINGS", "tap a control");
 
     char voice[10];
@@ -1025,9 +1236,21 @@ void drawSettingsMenu(const device_settings::Settings& settings,
     }
     drawHintLine("tap open | B next");
     flush();
+#endif
 }
 
 void drawPercentSetting(const char* title, uint8_t percent, const char* hint) {
+#if TOKENGOCHI_COMPACT_UI
+    const bool brightness = strcmp(title, "BRIGHT") == 0;
+    compactCentered(5, 1, 0x87F0, brightness ? "SCREEN" : title, SCREEN_W - 8);
+    char value[12];
+    snprintf(value, sizeof(value), "%u%%", (unsigned)percent);
+    compactCentered(36, 2, FG, value, SCREEN_W - 8);
+    compactBar(36, 74, SCREEN_W - 72, 10, percent * 10, 0x07E0);
+    compactHint(hint ? hint : "B +10  A back");
+    flush();
+    return;
+#else
     const bool brightness = strcmp(title, "BRIGHT") == 0;
     drawSettingsChrome(brightness ? "SCREEN" : title,
                        brightness ? "display brightness" : "speaker volume");
@@ -1045,9 +1268,18 @@ void drawPercentSetting(const char* title, uint8_t percent, const char* hint) {
     drawRoundButton(SCREEN_CX + 86, SCREEN_CY + 84, 58, "+", 0x07E0, 0x0340, 0x07E0, 4);
     drawHintLine(hint ? hint : "tap -/+ | B +10");
     flush();
+#endif
 }
 
 void drawFeedbackSettings(const device_settings::Settings& settings) {
+#if TOKENGOCHI_COMPACT_UI
+    compactCentered(5, 1, 0x87F0, "FEEDBACK", SCREEN_W - 8);
+    compactPill(42, 45, 68, 28, settings.buttonSound ? "sound on" : "sound off", 0x07E0, settings.buttonSound);
+    compactPill(130, 45, 68, 28, settings.vibration ? "vibe on" : "vibe off", 0x07E0, settings.vibration);
+    compactHint("B cycle  A back");
+    flush();
+    return;
+#else
     drawSettingsChrome("FEEDBACK", "alerts and haptics");
 
     const int y = SCREEN_CY + 10;
@@ -1073,9 +1305,21 @@ void drawFeedbackSettings(const device_settings::Settings& settings) {
 
     drawHintLine("tap toggle | B");
     flush();
+#endif
 }
 
 void drawAutoDimSettings(const device_settings::Settings& settings) {
+#if TOKENGOCHI_COMPACT_UI
+    compactCentered(5, 1, 0x87F0, "AUTO DIM", SCREEN_W - 8);
+    compactCentered(38, 2, settings.autoDimEnabled ? 0x07E0 : DIM,
+                    device_settings::autoDimLabel(settings), SCREEN_W - 8);
+    char dim[24];
+    snprintf(dim, sizeof(dim), "dim to %u%%", (unsigned)settings.dimBrightnessPercent);
+    compactCentered(78, 1, FG, dim, SCREEN_W - 8);
+    compactHint("B cycle  A back");
+    flush();
+    return;
+#else
     drawSettingsChrome("AUTO DIM", "screen rests when idle");
 
     const char* label = device_settings::autoDimLabel(settings);
@@ -1097,11 +1341,34 @@ void drawAutoDimSettings(const device_settings::Settings& settings) {
     drawCenteredSafeText(318, 2, FG, dim, 66);
     drawHintLine("tap/B cycle | A");
     flush();
+#endif
 }
 
 void drawBatterySettings(const battery_status::Snapshot& battery,
                          battery_status::WarningState warning,
                          bool lowBatteryWarningEnabled) {
+#if TOKENGOCHI_COMPACT_UI
+    compactCentered(5, 1, 0x87F0, "BATTERY", SCREEN_W - 8);
+    char pct[10];
+    formatBatteryPercent(pct, sizeof(pct), battery);
+    compactCentered(30, 2, battery_status::isWarning(warning) ? MOOD_HUNGRY : FG, pct, SCREEN_W - 8);
+    if (battery.percentKnown && battery.percent >= 0) {
+        compactBar(36, 64, SCREEN_W - 72, 9, battery.percent * 10,
+                   battery_status::isWarning(warning) ? MOOD_HUNGRY : 0x07E0);
+    }
+    char line[48];
+    if (battery.voltageKnown) {
+        snprintf(line, sizeof(line), "%dmV  %s", (int)battery.voltageMv, battery_status::chargeLabel(battery.charge));
+    } else {
+        snprintf(line, sizeof(line), "%s", battery_status::chargeLabel(battery.charge));
+    }
+    compactCentered(82, 1, DIM, line, SCREEN_W - 8);
+    snprintf(line, sizeof(line), "warn %s  %s", lowBatteryWarningEnabled ? "on" : "off",
+             battery_status::warningLabel(warning));
+    compactHint(line);
+    flush();
+    return;
+#else
     drawSettingsChrome("BATTERY", battery_status::warningLabel(warning));
 
     char pct[10];
@@ -1137,15 +1404,40 @@ void drawBatterySettings(const battery_status::Snapshot& battery,
     drawCenteredSafeText(386, 1, lowBatteryWarningEnabled ? 0x07E0 : DIM, line, 68);
     drawHintLine("B warn | refresh");
     flush();
+#endif
 }
 
 void drawSettingsSaved(const char* label) {
+#if TOKENGOCHI_COMPACT_UI
+    compactCentered(38, 2, 0x07E0, "done", SCREEN_W - 8);
+    if (label) compactCentered(72, 1, DIM, label, SCREEN_W - 8);
+    flush();
+    return;
+#else
     drawSettingsChrome("SAVED", label ? label : "settings");
     drawCenteredSafeText(SCREEN_CY - 12, 3, 0x07E0, "done", 76);
     flush();
+#endif
 }
 
 void drawRec(uint32_t elapsedS, uint32_t totalS, bool autoMode) {
+#if TOKENGOCHI_COMPACT_UI
+    target().fillRect(0, 18, SCREEN_W, SCREEN_H - 33, BG);
+    compactCentered(22, 1, 0xF800, "REC", SCREEN_W - 8);
+    if (totalS == 0) totalS = 1;
+    if (elapsedS > totalS) elapsedS = totalS;
+    compactBar(24, 48, SCREEN_W - 48, 10, (int)((elapsedS * 1000UL) / totalS), 0xF800);
+    char t[16];
+    if (autoMode) {
+        snprintf(t, sizeof(t), "AUTO");
+    } else {
+        snprintf(t, sizeof(t), "%lus left", (unsigned long)(totalS - elapsedS));
+    }
+    compactCentered(72, 2, FG, t, SCREEN_W - 8);
+    compactHint(autoMode ? "pause sends  B send  A cancel" : "B send  A cancel");
+    flush();
+    return;
+#else
     target().fillRect(0, 50, SCREEN_W, SCREEN_H - 82, BG);
     drawCenteredSafeText(58, 3, 0xF800, "REC", 92);
 
@@ -1162,21 +1454,61 @@ void drawRec(uint32_t elapsedS, uint32_t totalS, bool autoMode) {
     drawCenteredSafeText(SCREEN_CY + 132, 3, FG, t, 80);
     drawHintLine(autoMode ? "pause sends | B" : "tap/B send | A");
     flush();
+#endif
 }
 
 // ---------------------------------------------------------------- thinking ---
 void drawThinking() {
+#if TOKENGOCHI_COMPACT_UI
+    const int progress = (int)((millis() / 8) % 1000);
+    compactBar(28, 50, SCREEN_W - 56, 9, progress, 0x87F0);
+    compactCentered(72, 1, DIM, "sending...", SCREEN_W - 8);
+    flush();
+    return;
+#else
     drawArcDots(HOME_RING_R, -90, 270, RING_DIM, HOME_RING_THICKNESS, 12);
     const int sweep = 72;
     const int start = -90 + (int)((millis() / 8) % 360);
     drawArcDots(128, start, start + sweep, 0x87F0, 8, 2);
     centeredText(SCREEN_CY - 12, 2, DIM, "sending...");
     flush();
+#endif
 }
 
 // ---------------------------------------------------------------- stats ------
 void drawStats(const PetState& s, int rssi, const char* proxyUrl) {
     const uint16_t accent = moodColor(s.mood);
+#if TOKENGOCHI_COMPACT_UI
+    compactCentered(5, 1, accent, s.mood, SCREEN_W - 8);
+    compactBar(8, 24, SCREEN_W - 16, 7, compactProgressForState(s), accent);
+    char line[48];
+    if (hasCodexPace(s)) {
+        formatPaceLabel(line, sizeof(line), s);
+    } else if (hasCodexAccountUsage(s)) {
+        char pct[12];
+        formatUsagePercent(pct, sizeof(pct), s);
+        snprintf(line, sizeof(line), "%s weekly", pct);
+    } else {
+        snprintf(line, sizeof(line), "%ldk today", (long)(s.food_today / 1000));
+    }
+    compactText(8, 42, 1, FG, line, 104);
+    if (hasActivity(s)) {
+        char idle[24];
+        formatIdleLabel(idle, sizeof(idle), s);
+        compactText(8, 60, 1, activityColor(s), idle, 104);
+    } else {
+        snprintf(line, sizeof(line), "%ldk total", (long)(s.total_tokens_ever / 1000));
+        compactText(8, 60, 1, DIM, line, 104);
+    }
+    snprintf(line, sizeof(line), "%d dBm", rssi);
+    compactText(SCREEN_W - 70, 42, 1, rssi > -70 ? 0x07E0 : 0xFD20, line, 62);
+    const char* host = strstr(proxyUrl, "://");
+    host = host ? host + 3 : proxyUrl;
+    compactText(SCREEN_W - 100, 60, 1, DIM, host, 94);
+    compactHint("A home  B reset?");
+    flush();
+    return;
+#else
     drawArcDots(HOME_RING_R, -90, 270, RING_DIM, HOME_RING_THICKNESS, 10);
     if (hasCodexAccountUsage(s)) {
         int progressX1000 = s.codex_usage_percent_x10;
@@ -1241,14 +1573,27 @@ void drawStats(const PetState& s, int rssi, const char* proxyUrl) {
 
     drawHintLine("tap/A home  |  B reset?");
     flush();
+#endif
 }
 
 void drawHintLine(const char* s) {
+#if TOKENGOCHI_COMPACT_UI
+    compactHint(s);
+#else
     drawCenteredSafeText(SCREEN_H - 28, 1, DIM, s, 40);
     flush();
+#endif
 }
 
 void drawGreeting(const char* lastMsg) {
+#if TOKENGOCHI_COMPACT_UI
+    compactCentered(28, 1, DIM, "last heard:", SCREEN_W - 8);
+    char buf[64];
+    snprintf(buf, sizeof(buf), "\"%s\"", lastMsg);
+    compactCentered(58, 1, FG, buf, SCREEN_W - 8);
+    flush();
+    return;
+#else
     drawArcDots(HOME_RING_R, -90, 270, RING_DIM, HOME_RING_THICKNESS, 12);
     drawCenteredSafeText(88, 2, DIM, "last heard:", 80);
 
@@ -1256,9 +1601,17 @@ void drawGreeting(const char* lastMsg) {
     snprintf(buf, sizeof(buf), "\"%s\"", lastMsg);
     drawCenteredSafeText(132, 2, FG, buf, 62);
     flush();
+#endif
 }
 
 void drawConfirmReset() {
+#if TOKENGOCHI_COMPACT_UI
+    compactCentered(26, 2, 0xFD20, "reset pet?", SCREEN_W - 8);
+    compactPill(38, 72, 70, 28, "A yes", 0x07E0, true);
+    compactPill(132, 72, 70, 28, "B no", 0xF800, true);
+    flush();
+    return;
+#else
     drawArcDots(HOME_RING_R, -90, 270, RING_DIM, HOME_RING_THICKNESS, 10);
     drawCenteredSafeText(SCREEN_CY - 64, 3, 0xFD20, "reset pet?", 78);
 
@@ -1281,6 +1634,7 @@ void drawConfirmReset() {
     target().setCursor(noX - w / 2, actionY - target().fontHeight() / 2);
     target().print("B no");
     flush();
+#endif
 }
 
 }  // namespace ui

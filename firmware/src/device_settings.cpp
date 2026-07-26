@@ -39,7 +39,7 @@ uint8_t clampBrightnessPercent(int value) {
 }
 
 uint8_t clampDimBrightnessPercent(int value) {
-    if (value < 5) return 5;
+    if (value < 1) return 1;
     if (value > 80) return 80;
     return (uint8_t)value;
 }
@@ -113,6 +113,7 @@ Settings cycleAutoDim(Settings current) {
 
 Settings normalize(Settings value) {
     Settings fallback = defaults();
+    const uint8_t originalVersion = value.version;
     value.version = VERSION;
     value.recordSeconds = normalizeRecordSeconds(value.recordSeconds);
     value.brightnessPercent = clampBrightnessPercent(value.brightnessPercent);
@@ -121,7 +122,7 @@ Settings normalize(Settings value) {
     value.autoDimEnabled = value.autoDimTimeoutMs != 0;
     value.dimBrightnessPercent = clampDimBrightnessPercent(value.dimBrightnessPercent);
     if (value.dimBrightnessPercent >= value.brightnessPercent) {
-        value.dimBrightnessPercent = clampDimBrightnessPercent(value.brightnessPercent / 2);
+        value.dimBrightnessPercent = fallback.dimBrightnessPercent;
     }
     value.lowBatteryPercent = clampPercent(value.lowBatteryPercent);
     value.criticalBatteryPercent = clampPercent(value.criticalBatteryPercent);
@@ -129,6 +130,21 @@ Settings normalize(Settings value) {
     if (value.criticalBatteryPercent < 5) value.criticalBatteryPercent = fallback.criticalBatteryPercent;
     if (value.criticalBatteryPercent >= value.lowBatteryPercent) {
         value.criticalBatteryPercent = value.lowBatteryPercent > 5 ? value.lowBatteryPercent - 5 : 5;
+    }
+    if (originalVersion < VERSION) {
+        if (value.brightnessPercent > fallback.brightnessPercent) {
+            value.brightnessPercent = fallback.brightnessPercent;
+        }
+        if (value.volumePercent > fallback.volumePercent) {
+            value.volumePercent = fallback.volumePercent;
+        }
+        if (!value.autoDimEnabled || value.autoDimTimeoutMs > fallback.autoDimTimeoutMs) {
+            value.autoDimEnabled = true;
+            value.autoDimTimeoutMs = fallback.autoDimTimeoutMs;
+        }
+        if (value.dimBrightnessPercent > fallback.dimBrightnessPercent) {
+            value.dimBrightnessPercent = fallback.dimBrightnessPercent;
+        }
     }
     return value;
 }

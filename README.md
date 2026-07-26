@@ -1,8 +1,9 @@
 # Token Tamagotchi 🐣
 
-A virtual pet for the **M5Stack StopWatch Dev Kit (ESP32-S3)** that lives on your
-Claude Code / Codex CLI token usage. Watch it get fat while you ship code, get
-sleepy when you stop, and chat back from a separate voice input mode.
+A virtual pet for small M5Stack ESP32 devices that lives on your Claude Code /
+Codex CLI token usage. The primary target is the **M5Stack StopWatch Dev Kit
+(ESP32-S3)**, with a compact **M5StickC Plus2-class** target for the smaller
+240x135 screen.
 
 ```
          ⌚  ← the StopWatch
@@ -16,6 +17,8 @@ sleepy when you stop, and chat back from a separate voice input mode.
 
 - **M5Stack StopWatch Dev Kit** (C152, ESP32-S3R8, 8 MB PSRAM, 16 MB flash)
   — has 1.75" round AMOLED, 2 buttons, MEMS mic, speaker, vibration motor.
+- **M5StickC Plus2-class ESP32-PICO device** — compact 240x135 display target
+  without touch/vibration. Build with PlatformIO env `m5stickc-plus2`.
 - **A Mac or VPS** running Node 18+. Local mode runs `bridge/tamagotchi-bridge.mjs` on LAN; cloud mode runs a Cloudflare Worker and can either receive pushed snapshots from `bridge/token-ingest.mjs` or pull from `bridge/token-source.mjs` on a VPS.
 - **A Groq API key** (free tier is fine) — only needed for `/transcribe`.
 
@@ -120,19 +123,26 @@ supported Python version:
 ../tools/pio --version
 ```
 
-Put the StopWatch into download mode (hold the side button ~2 s until the
-green LED is solid), then:
+For the StopWatch, put it into download mode (hold the side button ~2 s until
+the green LED is solid), then:
 
 ```sh
 ../tools/pio run -t upload
 ../tools/pio device monitor     # optional: 115200 baud serial log
 ```
 
+For the M5StickC Plus2-class target:
+
+```sh
+../tools/pio run -e m5stickc-plus2 -t upload --upload-port /dev/cu.usbserial-...
+../tools/pio device monitor --port /dev/cu.usbserial-... --baud 115200
+```
+
 ### 4. Use the device
 
 | action                                  | how                                            |
 |-----------------------------------------|------------------------------------------------|
-| See the pet’s mood on the disc          | just look at it (polls every 30 s)             |
+| See the pet’s mood on the disc          | just look at it (polls every 5 min)            |
 | Check stats (mood / today / total / RSSI)| hold KEYB or tap the outer home ring           |
 | Return home from stats                  | tap the stats screen or short-press KEYA       |
 | Reset the pet (new birth, clear chat)   | stats → KEYB → KEYA, or tap yes in confirm     |
@@ -148,6 +158,19 @@ green LED is solid), then:
 
 For a visual button/mode reference, open `docs/device-interactions.html`.
 
+Power saver defaults lower both targets to 35% brightness, 40% volume, Wi-Fi
+modem sleep, reduced CPU clock, passive sleep CPU downclock, 5 minute active
+pet polling, 10 minute passive asleep polling, direct reconnect to the last
+known-good SSID before scanning, 15 s auto-dim to 1%, display sleep after 30 s
+of safe idle time, reduced Wi-Fi TX power while connected, MCU light sleep
+with 5 s passive wake intervals, and 5 minute asleep Wi-Fi reconnect checks.
+When the device is passively asleep, the Wi-Fi radio powers down between polls
+or user interactions. Older saved device settings are migrated down to that
+profile on first boot after the settings-version bump. The StopWatch target
+skips MCU light sleep while a USB serial host is attached so diagnostics and
+screen capture stay reliable, but keeps light sleep enabled for standalone or
+power-only use.
+
 ### 5. Develop / iterate
 
 - **Want a different pet?** `node tools/generate-sprites.mjs` regenerates
@@ -160,8 +183,9 @@ For a visual button/mode reference, open `docs/device-interactions.html`.
   posts a TTS clip to it and prints the (mock) transcript.
 - **Want a device-screen capture?**
   `node tools/capture-device-screen.mjs` captures the current AMOLED frame over
-  USB serial and writes a round-masked PNG under `screenshots/`. Display
-  geometry is documented in `docs/display-geometry.json`.
+  USB serial and writes a PNG under `screenshots/`. Use the default round mask
+  for the StopWatch, or `--mask none` for rectangular compact targets. StopWatch
+  display geometry is documented in `docs/display-geometry.json`.
 
 ## API reference
 
@@ -179,7 +203,7 @@ For a visual button/mode reference, open `docs/device-interactions.html`.
 
 ```
 +----------------------+      HTTPS      +----------------------+     D1      +-------------+
-|  StopWatch (C152)    | ------------->  |  Cloudflare Worker   | ---------> |  Groq API   |
+|  M5Stack device      | ------------->  |  Cloudflare Worker   | ---------> |  Groq API   |
 |  HTTPS PROXY_URL     |                |  /pet, /transcribe   |            |  Whisper    |
 +----------------------+                +----------------------+            +-------------+
        |      ^

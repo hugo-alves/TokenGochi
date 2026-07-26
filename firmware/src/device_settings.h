@@ -4,13 +4,13 @@
 
 namespace device_settings {
 
-static constexpr uint8_t VERSION = 2;
+static constexpr uint8_t VERSION = 4;
 static constexpr uint32_t RECORD_SECONDS_DEFAULT = 10;
 static constexpr bool RECORD_AUTO_DEFAULT = true;
-static constexpr uint8_t BRIGHTNESS_PERCENT_DEFAULT = 80;
-static constexpr uint8_t VOLUME_PERCENT_DEFAULT = 70;
-static constexpr uint32_t AUTO_DIM_TIMEOUT_DEFAULT_MS = 60000;
-static constexpr uint8_t AUTO_DIM_PERCENT_DEFAULT = 35;
+static constexpr uint8_t BRIGHTNESS_PERCENT_DEFAULT = 35;
+static constexpr uint8_t VOLUME_PERCENT_DEFAULT = 40;
+static constexpr uint32_t AUTO_DIM_TIMEOUT_DEFAULT_MS = 15000;
+static constexpr uint8_t AUTO_DIM_PERCENT_DEFAULT = 1;
 static constexpr uint8_t LOW_BATTERY_PERCENT_DEFAULT = 20;
 static constexpr uint8_t CRITICAL_BATTERY_PERCENT_DEFAULT = 10;
 

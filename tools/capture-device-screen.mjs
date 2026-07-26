@@ -150,6 +150,8 @@ function configureSerial(port, baud) {
     "raw",
     "-echo",
     "-icanon",
+    "clocal",
+    "-hupcl",
     "min", "0",
     "time", "10",
   ]);
@@ -212,6 +214,26 @@ function readUntilHeader(fd, deadline) {
     if (buf.length > 64 * 1024) buf = buf.subarray(buf.length - 64 * 1024);
   }
   throw new Error("timed out waiting for TGSHOT header");
+}
+
+function requestHeader(fd, deadline) {
+  let lastError = null;
+
+  while (Date.now() < deadline) {
+    writeSync(fd, Buffer.from("\nTGWAKE\n"));
+    sleepMs(150);
+    writeSync(fd, Buffer.from("\nTGSHOT\n"));
+    try {
+      return readUntilHeader(fd, Math.min(deadline, Date.now() + 3000));
+    } catch (err) {
+      lastError = err;
+      if (!(err instanceof Error) || err.message !== "timed out waiting for TGSHOT header") {
+        throw err;
+      }
+    }
+  }
+
+  throw lastError ?? new Error("timed out waiting for TGSHOT header");
 }
 
 function readExactPayload(fd, first, byteCount, deadline) {
@@ -315,8 +337,8 @@ function capture(opts) {
   }
   if (!existsSync(port)) throw new Error(`serial port not found: ${port}`);
 
-  configureSerial(port, opts.baud);
   const fd = openSerial(port);
+  configureSerial(port, opts.baud);
   const deadline = Date.now() + opts.timeoutMs;
 
   try {
@@ -325,8 +347,7 @@ function capture(opts) {
       if (!chunk.length) break;
     }
 
-    writeSync(fd, Buffer.from("\nTGSHOT\n"));
-    const header = readUntilHeader(fd, deadline);
+    const header = requestHeader(fd, deadline);
     if (header.byteCount !== header.width * header.height * 2) {
       throw new Error(`unexpected byte count: ${header.byteCount} for ${header.width}x${header.height}`);
     }

@@ -10,7 +10,7 @@ namespace pet_sprite {
 
 static uint8_t g_frame = 0;
 static uint32_t g_lastBlinkMs = 0;
-static const uint32_t BLINK_PERIOD_MS = 250;  // 4 fps
+static const uint32_t BLINK_PERIOD_MS = TOKENGOCHI_BLINK_PERIOD_MS;
 
 uint8_t moodIndex(const char* mood) {
     if (!mood) return PET_HAPPY;

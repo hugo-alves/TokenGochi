@@ -1,5 +1,7 @@
 #include <M5Unified.h>
 #include <WiFi.h>
+#include <driver/uart.h>
+#include <esp_sleep.h>
 
 #include "config.h"
 #include "secrets.h"
@@ -39,6 +41,9 @@ static bool         g_wifiUp     = false;
 static bool         g_bridgeUp   = false;
 static uint32_t     g_lastPoll   = 0;
 static uint32_t     g_lastRecon  = 0;
+static size_t       g_lastWifiCredentialIndex = kWifiNetworkCount;
+static bool         g_wifiReconnectRequested = false;
+static bool         g_wifiRadioOffForIdle = false;
 static uint32_t     g_lastRecRedraw = 0;
 static uint32_t     g_recordSeconds = device_settings::RECORD_SECONDS_DEFAULT;
 static uint32_t     g_clockEpochSec = 0;
@@ -66,6 +71,17 @@ static uint32_t     g_lastBatterySampleMs = 0;
 static battery_status::Snapshot g_battery = battery_status::unknown();
 static battery_status::WarningState g_batteryWarning = battery_status::WarningState::Unknown;
 static display_policy::DisplayState g_displayState = display_policy::DisplayState::Bright;
+static bool         g_displaySleeping = false;
+static uint32_t     g_appliedCpuMhz = 0;
+static uint32_t     g_lightSleepEntries = 0;
+static uint64_t     g_lightSleepTotalMs = 0;
+static uint32_t     g_lastLightSleepMs = 0;
+static int          g_lastLightSleepWake = ESP_SLEEP_WAKEUP_UNDEFINED;
+static int          g_lastLightSleepErr = ESP_OK;
+static int          g_lastLightSleepTimerErr = ESP_OK;
+static int          g_lastLightSleepUartErr = ESP_OK;
+static bool         g_lightSleepAnnounced = false;
+static uint32_t     g_serialAwakeUntilMs = 0;
 static bool         g_greetOnFirstPoll = true;
 static bool         g_suppressButtonsUntilRelease = false;
 static uint32_t     g_suppressButtonsUntilMs = 0;
@@ -78,7 +94,6 @@ static constexpr uint32_t SETTINGS_TIMEOUT_MS = 15000;
 static constexpr uint32_t SETTINGS_SAVED_MS = 900;
 static constexpr uint32_t SETTINGS_CHORD_MS = 1200;
 static constexpr uint32_t GREETING_HOLD_MS = 3000;
-static constexpr uint32_t BATTERY_SAMPLE_MS = 30000;
 static constexpr uint8_t SETTINGS_ITEM_COUNT = 6;
 
 // --- helpers ---------------------------------------------------------------
@@ -86,6 +101,293 @@ static void transcribeAndShow(const uint8_t* wav, size_t size);
 static void enterSettings(const char* source);
 static void openSettingsItem(uint8_t index, const char* source);
 static void returnToPet(const char* source);
+static void stopWifiRadio(const char* source, bool preserveBridge = false, bool idleSleep = false);
+static void sampleBattery(bool force, const char* source);
+static void sleepForLoopDelay(uint32_t delayMs);
+static void printPowerProfile(Stream& out);
+static bool passiveIdlePowerMode();
+
+static constexpr uint32_t kMaxPollIntervalMs =
+    TOKENGOCHI_PASSIVE_POLL_INTERVAL_MS > POLL_INTERVAL_MS
+        ? TOKENGOCHI_PASSIVE_POLL_INTERVAL_MS
+        : POLL_INTERVAL_MS;
+
+static uint32_t pollIntervalForPassive(bool passive) {
+    return passive ? TOKENGOCHI_PASSIVE_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
+}
+
+static uint32_t currentPollIntervalMs() {
+    return pollIntervalForPassive(passiveIdlePowerMode());
+}
+
+static void forcePollDue() {
+    g_lastPoll = millis() - kMaxPollIntervalMs - 1;
+}
+
+static bool serialCommandIs(const char* line, const char* command, const char* wakeSuffix = nullptr) {
+    if (strcmp(line, command) == 0) return true;
+    if (strstr(line, command) != nullptr) return true;
+    if (!wakeSuffix) return false;
+    if (strstr(line, wakeSuffix) != nullptr) return true;
+
+    // UART wake from light sleep can drop the first byte or two. Accept a
+    // short trailing fragment so diagnostic commands still work after wake.
+    const size_t lineLen = strlen(line);
+    const size_t suffixLen = strlen(wakeSuffix);
+    if (lineLen < 3 || lineLen > suffixLen) return false;
+    return strcmp(line, wakeSuffix + suffixLen - lineLen) == 0;
+}
+
+static bool handleImmediateSerialCommand(char* line) {
+    if (serialCommandIs(line, "TGWAKE", "WAKE")) {
+        g_serialAwakeUntilMs = millis() + TOKENGOCHI_SERIAL_WAKE_AWAKE_MS;
+        return true;
+    }
+    if (serialCommandIs(line, "TGSHOT", "SHOT")) {
+        g_serialAwakeUntilMs = millis() + TOKENGOCHI_SERIAL_WAKE_AWAKE_MS;
+        ui::writeScreenshot(Serial);
+        return true;
+    }
+    if (serialCommandIs(line, "TGPOWER", "POWER")) {
+        g_serialAwakeUntilMs = millis() + TOKENGOCHI_SERIAL_WAKE_AWAKE_MS;
+        printPowerProfile(Serial);
+        return true;
+    }
+    if (serialCommandIs(line, "TGPOLL", "POLL")) {
+        g_serialAwakeUntilMs = millis() + TOKENGOCHI_SERIAL_WAKE_AWAKE_MS;
+        forcePollDue();
+        g_wifiReconnectRequested = true;
+        Serial.println("TGPOLL scheduled");
+        Serial.flush();
+        return true;
+    }
+    return false;
+}
+
+static const char* displayStateLabel(display_policy::DisplayState state) {
+    switch (state) {
+        case display_policy::DisplayState::Bright: return "bright";
+        case display_policy::DisplayState::Dimmed: return "dimmed";
+        case display_policy::DisplayState::Asleep: return "asleep";
+    }
+    return "unknown";
+}
+
+static void applyCpuFrequency(uint32_t targetMhz, const char* source) {
+    if (g_appliedCpuMhz == targetMhz && getCpuFrequencyMhz() == targetMhz) return;
+
+    Serial.flush();
+    bool ok = setCpuFrequencyMhz(targetMhz);
+    Serial.begin(115200);
+    delay(2);
+    g_appliedCpuMhz = getCpuFrequencyMhz();
+    Serial.printf("[power] cpu source=%s target=%uMHz actual=%uMHz ok=%d\n",
+                  source,
+                  (unsigned)targetMhz,
+                  (unsigned)g_appliedCpuMhz,
+                  ok ? 1 : 0);
+}
+
+static bool statePollDue(uint32_t now) {
+    return now - g_lastPoll > currentPollIntervalMs();
+}
+
+static void applyWifiPowerPolicy(const char* source) {
+    const bool ok = WiFi.setTxPower(TOKENGOCHI_WIFI_TX_POWER);
+    Serial.printf("[power] wifi source=%s tx_power=%d ok=%d\n",
+                  source,
+                  (int)WiFi.getTxPower(),
+                  ok ? 1 : 0);
+}
+
+static void printPowerProfile(Stream& out) {
+    out.println("TGPOWER BEGIN");
+    out.flush();
+    out.printf("TGPOWER device=%s cpu_mhz=%u active_cpu_mhz=%u sleep_cpu_mhz=%u wifi_mode=%d wifi_ps=%d wifi_tx_power=%d wifi_idle_off=%d last_wifi_index=%d poll_ms=%u active_poll_ms=%u passive_poll_ms=%u reconnect_ms=%u sleep_reconnect_ms=%u idle_off_ms=%u idle_delay_ms=%u active_delay_ms=%u sleep_delay_ms=%u passive_light_sleep_ms=%u\n",
+               TOKENGOCHI_DEVICE_NAME,
+               (unsigned)getCpuFrequencyMhz(),
+               (unsigned)TOKENGOCHI_CPU_MHZ,
+               (unsigned)TOKENGOCHI_SLEEP_CPU_MHZ,
+               (int)WiFi.getMode(),
+               (int)WiFi.getSleep(),
+               (int)WiFi.getTxPower(),
+               g_wifiRadioOffForIdle ? 1 : 0,
+               g_lastWifiCredentialIndex < kWifiNetworkCount ? (int)g_lastWifiCredentialIndex : -1,
+               (unsigned)currentPollIntervalMs(),
+               (unsigned)POLL_INTERVAL_MS,
+               (unsigned)TOKENGOCHI_PASSIVE_POLL_INTERVAL_MS,
+               (unsigned)TOKENGOCHI_WIFI_RECONNECT_MS,
+               (unsigned)TOKENGOCHI_WIFI_SLEEP_RECONNECT_MS,
+               (unsigned)TOKENGOCHI_WIFI_IDLE_OFF_MS,
+               (unsigned)TOKENGOCHI_IDLE_LOOP_DELAY_MS,
+               (unsigned)TOKENGOCHI_ACTIVE_LOOP_DELAY_MS,
+               (unsigned)TOKENGOCHI_SLEEP_LOOP_DELAY_MS,
+               (unsigned)TOKENGOCHI_PASSIVE_LIGHT_SLEEP_MS);
+    out.flush();
+    out.printf("TGPOWER display=%s sleeping=%d brightness=%u dim=%u dim_timeout_ms=%lu sleep_timeout_ms=%u\n",
+               displayStateLabel(g_displayState),
+               g_displaySleeping ? 1 : 0,
+               (unsigned)g_settings.brightnessPercent,
+               (unsigned)g_settings.dimBrightnessPercent,
+               (unsigned long)g_settings.autoDimTimeoutMs,
+               (unsigned)TOKENGOCHI_DISPLAY_SLEEP_MS);
+    out.flush();
+    out.printf("TGPOWER audio speaker_running=%d mic_running=%d mic_active=%d volume=%u battery_sample_ms=%u\n",
+               M5.Speaker.isRunning() ? 1 : 0,
+               M5.Mic.isRunning() ? 1 : 0,
+               audio::micActive() ? 1 : 0,
+               (unsigned)g_settings.volumePercent,
+               (unsigned)TOKENGOCHI_BATTERY_SAMPLE_MS);
+    out.flush();
+    const uint32_t totalSleepMsLow = (uint32_t)(g_lightSleepTotalMs & 0xffffffffULL);
+    const uint32_t totalSleepMsHigh = (uint32_t)(g_lightSleepTotalMs >> 32);
+    out.printf("TGPOWER sleep light_enabled=%d serial_guard=%d serial_connected=%d entries=%lu total_ms_low=%lu total_ms_high=%lu last_ms=%u last_wake=%d last_err=%d timer_err=%d uart_err=%d min_ms=%u\n",
+               TOKENGOCHI_LIGHT_SLEEP ? 1 : 0,
+               TOKENGOCHI_LIGHT_SLEEP_WHEN_SERIAL_CONNECTED ? 0 : 1,
+               Serial ? 1 : 0,
+               (unsigned long)g_lightSleepEntries,
+               (unsigned long)totalSleepMsLow,
+               (unsigned long)totalSleepMsHigh,
+               (unsigned)g_lastLightSleepMs,
+               g_lastLightSleepWake,
+               g_lastLightSleepErr,
+               g_lastLightSleepTimerErr,
+               g_lastLightSleepUartErr,
+               (unsigned)TOKENGOCHI_LIGHT_SLEEP_MIN_MS);
+    out.flush();
+    const uint32_t now = millis();
+    const uint32_t serialAwakeRemaining =
+        g_serialAwakeUntilMs && (int32_t)(g_serialAwakeUntilMs - now) > 0
+            ? g_serialAwakeUntilMs - now
+            : 0;
+    out.printf("TGPOWER serial awake_remaining_ms=%u wake_grace_ms=%u\n",
+               (unsigned)serialAwakeRemaining,
+               (unsigned)TOKENGOCHI_SERIAL_WAKE_AWAKE_MS);
+    out.flush();
+    out.printf("TGPOWER battery percent=%d percent_known=%d voltage_mv=%d voltage_known=%d current_ma=%ld current_known=%d charge=%s warning=%s sampled_ms=%lu\n",
+               (int)g_battery.percent,
+               g_battery.percentKnown ? 1 : 0,
+               (int)g_battery.voltageMv,
+               g_battery.voltageKnown ? 1 : 0,
+               (long)g_battery.currentMa,
+               g_battery.currentKnown ? 1 : 0,
+               battery_status::chargeLabel(g_battery.charge),
+               battery_status::warningLabel(g_batteryWarning),
+               (unsigned long)g_battery.sampledAtMs);
+    out.println("TGPOWER END");
+    out.flush();
+}
+
+static bool displayVisible() {
+    return !g_displaySleeping && g_displayState != display_policy::DisplayState::Asleep;
+}
+
+static uint32_t loopDelayMs() {
+    if (g_mode == Mode::RECORDING) return TOKENGOCHI_ACTIVE_LOOP_DELAY_MS;
+    if (g_mode == Mode::TRANSCRIBING) return TOKENGOCHI_ACTIVE_LOOP_DELAY_MS;
+    if (passiveIdlePowerMode()) return TOKENGOCHI_PASSIVE_LIGHT_SLEEP_MS;
+    if (!displayVisible()) return TOKENGOCHI_SLEEP_LOOP_DELAY_MS;
+    switch (g_mode) {
+        case Mode::IDLE:
+        case Mode::VOICE_IDLE:
+        case Mode::STATS:
+            return TOKENGOCHI_IDLE_LOOP_DELAY_MS;
+        default:
+            return TOKENGOCHI_ACTIVE_LOOP_DELAY_MS;
+    }
+}
+
+static bool passiveIdlePowerMode() {
+    if (displayVisible()) return false;
+    if (g_mode != Mode::IDLE && g_mode != Mode::VOICE_IDLE) return false;
+    return !M5.Speaker.isRunning() && !M5.Mic.isRunning() && !audio::micActive();
+}
+
+static uint32_t wifiReconnectIntervalMs() {
+    return passiveIdlePowerMode()
+        ? TOKENGOCHI_WIFI_SLEEP_RECONNECT_MS
+        : TOKENGOCHI_WIFI_RECONNECT_MS;
+}
+
+static void applyRuntimePowerPolicy(const char* source) {
+    const uint32_t now = millis();
+    const bool passive = passiveIdlePowerMode();
+    const bool connected = g_wifiUp && WiFi.status() == WL_CONNECTED;
+    if (passive &&
+        connected &&
+        !statePollDue(now) &&
+        now - g_lastInteractionMs >= TOKENGOCHI_WIFI_IDLE_OFF_MS) {
+        stopWifiRadio("passive idle", true, true);
+    }
+
+    const bool offline = !g_wifiUp || WiFi.status() != WL_CONNECTED;
+    const uint32_t targetCpuMhz =
+        passive && offline
+            ? TOKENGOCHI_SLEEP_CPU_MHZ
+            : TOKENGOCHI_CPU_MHZ;
+    applyCpuFrequency(targetCpuMhz, source);
+}
+
+static bool lightSleepEligible(uint32_t delayMs) {
+    if (!TOKENGOCHI_LIGHT_SLEEP) return false;
+    if (delayMs < TOKENGOCHI_LIGHT_SLEEP_MIN_MS) return false;
+    if (!passiveIdlePowerMode()) return false;
+    if (WiFi.getMode() != WIFI_OFF) return false;
+#if !TOKENGOCHI_LIGHT_SLEEP_WHEN_SERIAL_CONNECTED
+    if (Serial) return false;
+#endif
+    if (g_wifiReconnectRequested) return false;
+    if (Serial.available() > 0) return false;
+    if (g_serialAwakeUntilMs && (int32_t)(g_serialAwakeUntilMs - millis()) > 0) return false;
+    return true;
+}
+
+static void sleepForLoopDelay(uint32_t delayMs) {
+    if (!lightSleepEligible(delayMs)) {
+        delay(delayMs);
+        return;
+    }
+
+    Serial.flush();
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    g_lastLightSleepTimerErr = esp_sleep_enable_timer_wakeup((uint64_t)delayMs * 1000ULL);
+    g_lastLightSleepUartErr = ESP_OK;
+    if (TOKENGOCHI_SERIAL_WAKEUP_EDGES > 0) {
+        g_lastLightSleepUartErr = uart_set_wakeup_threshold(UART_NUM_0, TOKENGOCHI_SERIAL_WAKEUP_EDGES);
+        if (g_lastLightSleepUartErr == ESP_OK) {
+            g_lastLightSleepUartErr = esp_sleep_enable_uart_wakeup(UART_NUM_0);
+        }
+    }
+
+    if (g_lastLightSleepTimerErr != ESP_OK) {
+        delay(delayMs);
+        return;
+    }
+
+    if (!g_lightSleepAnnounced) {
+        Serial.printf("[power] light_sleep enabled interval_ms=%u uart_err=%d\n",
+                      (unsigned)delayMs,
+                      g_lastLightSleepUartErr);
+        g_lightSleepAnnounced = true;
+        Serial.flush();
+    }
+
+    const uint32_t before = millis();
+    g_lastLightSleepErr = esp_light_sleep_start();
+    const uint32_t sleptMs = millis() - before;
+    if (g_lastLightSleepErr == ESP_OK) {
+        g_lightSleepEntries++;
+        g_lightSleepTotalMs += sleptMs;
+        g_lastLightSleepMs = sleptMs;
+        g_lastLightSleepWake = esp_sleep_get_wakeup_cause();
+        if (g_lastLightSleepWake == ESP_SLEEP_WAKEUP_UART) {
+            g_serialAwakeUntilMs = millis() + TOKENGOCHI_SERIAL_WAKE_AWAKE_MS;
+        }
+        return;
+    }
+
+    delay(delayMs);
+}
 
 static uint32_t currentEpochSec() {
     if (g_clockEpochSec == 0) return 0;
@@ -123,6 +425,25 @@ static void logBodyPreview(const char* tag, const char* body, size_t bodyLen) {
 
 static void drawBootScreen(const char* line2, uint16_t color) {
     ui::clearToBlack();
+#if TOKENGOCHI_COMPACT_UI
+    ui::target().setTextSize(2);
+    ui::target().setTextColor(0x87F0, 0x0000);
+    int w = ui::target().textWidth("TokenGochi");
+    ui::target().setCursor(SCREEN_CX - w / 2, 18);
+    ui::target().print("TokenGochi");
+
+    ui::target().setTextSize(1);
+    ui::target().setTextColor(0x7BEF, 0x0000);
+    w = ui::target().textWidth(TOKENGOCHI_DEVICE_NAME);
+    ui::target().setCursor(SCREEN_CX - w / 2, 48);
+    ui::target().print(TOKENGOCHI_DEVICE_NAME);
+
+    ui::target().setTextColor(color, 0x0000);
+    w = ui::target().textWidth(line2);
+    ui::target().setCursor(SCREEN_CX - w / 2, 74);
+    ui::target().print(line2);
+    ui::flush();
+#else
     ui::target().setTextSize(3);
     ui::target().setTextColor(0x87F0, 0x0000);
     int w = ui::target().textWidth("TokenGochi");
@@ -141,6 +462,7 @@ static void drawBootScreen(const char* line2, uint16_t color) {
     ui::target().setCursor(SCREEN_CX - w / 2, 198);
     ui::target().print(line2);
     ui::flush();
+#endif
 }
 
 static void handleSerialCommands() {
@@ -152,8 +474,8 @@ static void handleSerialCommands() {
         if (c == '\r') continue;
         if (c == '\n') {
             line[len] = '\0';
-            if (strcmp(line, "TGSHOT") == 0) {
-                ui::writeScreenshot(Serial);
+            if (handleImmediateSerialCommand(line)) {
+                // handled
             } else if (strcmp(line, "TGSETTINGS") == 0) {
                 enterSettings("serial");
             } else if (strcmp(line, "TGSETTING VOICE") == 0) {
@@ -180,6 +502,10 @@ static void handleSerialCommands() {
         }
         if (len < sizeof(line) - 1) {
             line[len++] = c;
+            line[len] = '\0';
+            if (handleImmediateSerialCommand(line)) {
+                len = 0;
+            }
         } else {
             len = 0;
         }
@@ -214,24 +540,64 @@ static void registerWifiEvents() {
     });
 }
 
-static bool connectWifiCredential(const WifiCredential& credential, size_t index) {
+static bool connectWifiCredential(const WifiCredential& credential, size_t index, uint32_t timeoutMs) {
     Serial.printf("[wifi] connecting to saved network %u/%u: '%s'\n",
                   (unsigned)(index + 1), (unsigned)kWifiNetworkCount, credential.ssid);
     WiFi.disconnect(false, false);
     delay(100);
     WiFi.begin(credential.ssid, credential.pass);
-    for (int i = 0; i < 30; i++) {
-        if (WiFi.status() == WL_CONNECTED) { g_wifiUp = true; return true; }
-        delay(500);
-        Serial.printf("[wifi] wait %d: status=%d\n", i + 1, (int)WiFi.status());
+    applyWifiPowerPolicy("begin");
+    const uint32_t stepMs = 500;
+    const uint32_t attempts = (timeoutMs + stepMs - 1) / stepMs;
+    for (uint32_t i = 0; i < attempts; i++) {
+        if (WiFi.status() == WL_CONNECTED) {
+            applyWifiPowerPolicy("connected");
+            g_wifiUp = true;
+            g_lastWifiCredentialIndex = index;
+            return true;
+        }
+        delay(stepMs);
+        Serial.printf("[wifi] wait %u/%u: status=%d\n",
+                      (unsigned)(i + 1),
+                      (unsigned)attempts,
+                      (int)WiFi.status());
     }
     return false;
 }
 
+static void stopWifiRadio(const char* source, bool preserveBridge, bool idleSleep) {
+    if (WiFi.getMode() != WIFI_OFF) {
+        WiFi.disconnect(false, false);
+        WiFi.mode(WIFI_OFF);
+        Serial.printf("[wifi] radio off source=%s\n", source);
+    }
+    g_wifiUp = false;
+    if (!preserveBridge) {
+        g_bridgeUp = false;
+    }
+    g_wifiRadioOffForIdle = idleSleep;
+}
+
 static void connectWifi() {
+    g_wifiRadioOffForIdle = false;
+    applyCpuFrequency(TOKENGOCHI_CPU_MHZ, "wifi");
     registerWifiEvents();
     WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
+    WiFi.setSleep(true);
+
+    if (g_lastWifiCredentialIndex < kWifiNetworkCount) {
+        Serial.printf("[wifi] direct reconnect to saved network %u/%u: '%s'\n",
+                      (unsigned)(g_lastWifiCredentialIndex + 1),
+                      (unsigned)kWifiNetworkCount,
+                      kWifiNetworks[g_lastWifiCredentialIndex].ssid);
+        if (connectWifiCredential(kWifiNetworks[g_lastWifiCredentialIndex],
+                                  g_lastWifiCredentialIndex,
+                                  TOKENGOCHI_WIFI_DIRECT_CONNECT_TIMEOUT_MS)) {
+            return;
+        }
+        Serial.println("[wifi] direct reconnect failed; scanning...");
+        g_lastWifiCredentialIndex = kWifiNetworkCount;
+    }
 
     bool visible[kWifiNetworkCount] = {};
     Serial.printf("[wifi] scanning for %u saved network(s)...\n", (unsigned)kWifiNetworkCount);
@@ -261,11 +627,11 @@ static void connectWifi() {
                           (unsigned)(i + 1), (unsigned)kWifiNetworkCount, kWifiNetworks[i].ssid);
             continue;
         }
-        if (connectWifiCredential(kWifiNetworks[i], i)) return;
+        if (connectWifiCredential(kWifiNetworks[i], i, TOKENGOCHI_WIFI_CONNECT_TIMEOUT_MS)) return;
     }
 
     if (!sawAny) Serial.println("[wifi] !!! no saved SSIDs visible to ESP32 (2.4 GHz only)");
-    g_wifiUp = false;
+    stopWifiRadio("connect failed");
 }
 
 static bool criticalBatteryActive() {
@@ -274,6 +640,20 @@ static bool criticalBatteryActive() {
 }
 
 static void applyBrightnessForDisplayState(const char* source) {
+    if (g_displayState == display_policy::DisplayState::Asleep) {
+        if (!g_displaySleeping) {
+            M5.Display.sleep();
+            g_displaySleeping = true;
+            Serial.printf("[display] source=%s state=asleep\n", source);
+        }
+        return;
+    }
+
+    if (g_displaySleeping) {
+        M5.Display.wakeup();
+        g_displaySleeping = false;
+    }
+
     const uint8_t percent = display_policy::targetBrightnessPercent(g_displayState,
                                                                     g_settings.brightnessPercent,
                                                                     g_settings.dimBrightnessPercent,
@@ -281,7 +661,7 @@ static void applyBrightnessForDisplayState(const char* source) {
     M5.Display.setBrightness(device_settings::brightnessToHardware(percent));
     Serial.printf("[display] brightness source=%s state=%s percent=%u\n",
                   source,
-                  g_displayState == display_policy::DisplayState::Dimmed ? "dimmed" : "bright",
+                  displayStateLabel(g_displayState),
                   (unsigned)percent);
 }
 
@@ -312,9 +692,12 @@ static bool saveSettings(const char* source) {
 
 static void noteInteraction(const char* source) {
     g_lastInteractionMs = millis();
-    if (g_displayState == display_policy::DisplayState::Dimmed) {
+    if (g_displayState != display_policy::DisplayState::Bright || g_displaySleeping) {
         g_displayState = display_policy::DisplayState::Bright;
         applyBrightnessForDisplayState(source);
+    }
+    if (!g_wifiUp || WiFi.status() != WL_CONNECTED) {
+        g_wifiReconnectRequested = true;
     }
 }
 
@@ -333,7 +716,8 @@ static void updateDisplayPolicy() {
         display_policy::targetState(displayActivityForMode(g_mode),
                                     idleMs,
                                     g_settings.autoDimEnabled,
-                                    g_settings.autoDimTimeoutMs);
+                                    g_settings.autoDimTimeoutMs,
+                                    TOKENGOCHI_DISPLAY_SLEEP_MS);
     if (target != g_displayState) {
         g_displayState = target;
         applyBrightnessForDisplayState("policy");
@@ -348,7 +732,7 @@ static bool batteryWarningVisibleInCurrentMode() {
 
 static void sampleBattery(bool force, const char* source) {
     const uint32_t now = millis();
-    if (!force && g_lastBatterySampleMs && now - g_lastBatterySampleMs < BATTERY_SAMPLE_MS) return;
+    if (!force && g_lastBatterySampleMs && now - g_lastBatterySampleMs < TOKENGOCHI_BATTERY_SAMPLE_MS) return;
 
     g_battery = battery_status::readHardware(now);
     g_batteryWarning = battery_status::warningFor(g_battery,
@@ -380,10 +764,15 @@ static void chirpFail() {
 }
 
 static void vibrate(uint8_t strength, uint16_t durationMs) {
+#if TOKENGOCHI_HAS_VIBRATION
     if (!g_settings.vibration || strength == 0 || durationMs == 0) return;
     M5.Power.setVibration(strength);
     delay(durationMs);
     M5.Power.setVibration(0);
+#else
+    (void)strength;
+    (void)durationMs;
+#endif
 }
 
 static bool buttonsSuppressed() {
@@ -586,6 +975,11 @@ static bool handleSettingsChord() {
 }
 
 static bool touchClicked(int16_t* x, int16_t* y) {
+#if !TOKENGOCHI_HAS_TOUCH
+    (void)x;
+    (void)y;
+    return false;
+#else
     if (!M5.Touch.isEnabled()) return false;
     const int count = M5.Touch.getCount();
     for (int i = 0; i < count; ++i) {
@@ -598,6 +992,7 @@ static bool touchClicked(int16_t* x, int16_t* y) {
         }
     }
     return false;
+#endif
 }
 
 static bool pointInCircle(int16_t x, int16_t y, int cx, int cy, int r) {
@@ -1007,8 +1402,25 @@ void setup() {
 
     auto cfg = M5.config();
     cfg.serial_baudrate = 115200;
+    cfg.output_power = false;
+    cfg.led_brightness = 0;
+    cfg.internal_imu = false;
+    cfg.external_imu = false;
+    cfg.internal_rtc = false;
+    cfg.external_rtc = false;
+#if defined(TOKENGOCHI_DEVICE_M5STICKC_PLUS2)
+    cfg.fallback_board = m5::board_t::board_M5StickCPlus2;
+#endif
     M5.begin(cfg);
-    Serial.printf("[boot] M5 ok, heap=%u psram=%u\n",
+    applyCpuFrequency(TOKENGOCHI_CPU_MHZ, "boot");
+#if defined(TOKENGOCHI_DEVICE_M5STICKC_PLUS2)
+    M5.Display.setRotation(1);
+#endif
+    Serial.printf("[boot] M5 ok, device=%s board=%d display=%dx%d heap=%u psram=%u\n",
+                  TOKENGOCHI_DEVICE_NAME,
+                  (int)M5.getBoard(),
+                  (int)M5.Display.width(),
+                  (int)M5.Display.height(),
                   ESP.getFreeHeap(), ESP.getPsramSize());
 
     ui::init();
@@ -1035,6 +1447,7 @@ void setup() {
     ui::clearToBlack();
 
     g_bridgeUp = net::pingBridge();
+    g_lastPoll = millis();
     Serial.printf("[boot] bridge %s (http=%d)\n",
                   g_bridgeUp ? "ok" : "down", net::lastStatus());
 
@@ -1043,6 +1456,7 @@ void setup() {
         PetState s;
         if (net::fetchPetState(s)) {
             g_state = s;
+            g_lastPoll = millis();
             syncClock(g_state.ts);
             g_greetingUntilMs = 0;
             drawPetHome();
@@ -1057,16 +1471,33 @@ void loop() {
     sampleBattery(false, "loop");
 
     if (handleSettingsChord()) {
-        delay(20);
+        sleepForLoopDelay(loopDelayMs());
         return;
     }
 
     // --- WiFi watchdog ------------------------------------------------------
     if (!g_wifiUp || WiFi.status() != WL_CONNECTED) {
         g_wifiUp = false;
-        if (millis() - g_lastRecon > 10000) {
-            g_lastRecon = millis();
-            Serial.println("[wifi] reconnecting...");
+        g_bridgeUp = false;
+        if (passiveIdlePowerMode() && WiFi.getMode() != WIFI_OFF) {
+            stopWifiRadio("offline idle");
+        }
+
+        const uint32_t now = millis();
+        const bool pollDueForIdleRadio =
+            g_wifiRadioOffForIdle && g_mode == Mode::IDLE && statePollDue(now);
+        const bool waitingForPollOrInteraction =
+            g_wifiRadioOffForIdle && passiveIdlePowerMode();
+        const uint32_t reconnectIntervalMs = wifiReconnectIntervalMs();
+        const bool periodicReconnectDue =
+            !waitingForPollOrInteraction && now - g_lastRecon > reconnectIntervalMs;
+        if (g_wifiReconnectRequested ||
+            pollDueForIdleRadio ||
+            periodicReconnectDue) {
+            g_wifiReconnectRequested = false;
+            g_lastRecon = now;
+            Serial.printf("[wifi] reconnecting interval_ms=%u...\n",
+                          (unsigned)(pollDueForIdleRadio ? 0 : reconnectIntervalMs));
             connectWifi();
         }
     }
@@ -1076,7 +1507,7 @@ void loop() {
 
     case Mode::IDLE: {
         // Poll /pet/state every POLL_INTERVAL_MS
-        if (g_wifiUp && (millis() - g_lastPoll) > POLL_INTERVAL_MS) {
+        if (g_wifiUp && statePollDue(millis())) {
             g_lastPoll = millis();
             PetState s;
             if (net::fetchPetState(s)) {
@@ -1085,11 +1516,11 @@ void loop() {
                 syncClock(g_state.ts);
                 Serial.printf("[poll] mood=%s food=%ld age=%ld ts=%ld\n",
                               s.mood, (long)s.food_today, (long)s.age_s, (long)s.ts);
-                drawPetHome();
+                if (displayVisible()) drawPetHome();
             } else {
                 g_bridgeUp = false;
                 Serial.printf("[poll] bridge down (http=%d)\n", net::lastStatus());
-                drawPetHome();
+                if (displayVisible()) drawPetHome();
             }
         }
 
@@ -1127,14 +1558,18 @@ void loop() {
         }
 
         // Animate the blink on the pet
-        if (g_bridgeUp && !g_greetingUntilMs && pet_sprite::tickBlink()) {
+        if (g_bridgeUp &&
+            !g_greetingUntilMs &&
+            g_displayState == display_policy::DisplayState::Bright &&
+            displayVisible() &&
+            pet_sprite::tickBlink()) {
             pet_sprite::drawCentered(pet_sprite::moodIndex(g_state.mood),
                                      pet_sprite::currentFrame(),
-                                     2);
+                                     TOKENGOCHI_HOME_PET_SCALE);
         }
 
         // Hide the greeting overlay once the timer expires
-        if (g_greetingUntilMs && millis() > g_greetingUntilMs) {
+        if (g_greetingUntilMs && millis() > g_greetingUntilMs && displayVisible()) {
             g_greetingUntilMs = 0;
             ui::clearToBlack();
             ui::drawStatus(g_state, g_wifiUp, g_bridgeUp);
@@ -1562,5 +1997,6 @@ void loop() {
 
     // Cheap liveness ping for the watchdog.
     updateDisplayPolicy();
-    delay(20);
+    applyRuntimePowerPolicy("loop");
+    sleepForLoopDelay(loopDelayMs());
 }

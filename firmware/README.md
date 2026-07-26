@@ -1,8 +1,10 @@
 # Firmware
 
-ESP32-S3 firmware for the **M5Stack StopWatch Dev Kit (C152)**. Renders a
-round-AMOLED virtual pet fed by your Claude Code / Codex CLI token usage.
-It can talk to either the local bridge (`../bridge`) or the Cloudflare worker
+Firmware for TokenGochi M5Stack devices. The default target is the **M5Stack
+StopWatch Dev Kit (C152)** with a 466x466 round AMOLED. The compact
+`m5stickc-plus2` target supports the M5StickC Plus2-class ESP32-PICO device
+with a 240x135 rectangular display, no touch, and no vibration. Both targets
+talk to either the local bridge (`../bridge`) or the Cloudflare worker
 (`../cloudflare`).
 
 ## Quick start
@@ -38,13 +40,22 @@ ipconfig getifaddr en0
 
 ### 4. Flash
 
-Connect the StopWatch via USB-C, put it in download mode by holding the
-reset button ~2 s until the green LED lights, then:
+Connect the StopWatch via USB-C, put it in download mode by holding the reset
+button ~2 s until the green LED lights, then:
 
 ```sh
 cd firmware
 ../tools/pio run -t upload
 ../tools/pio device monitor        # optional, 115200 baud
+```
+
+For the M5StickC Plus2-class target, use the explicit environment and serial
+port:
+
+```sh
+cd firmware
+../tools/pio run -e m5stickc-plus2 -t upload --upload-port /dev/cu.usbserial-...
+../tools/pio device monitor --port /dev/cu.usbserial-... --baud 115200
 ```
 
 First build downloads the ESP32 toolchain + M5Unified + ArduinoJson
@@ -53,22 +64,24 @@ First build downloads the ESP32 toolchain + M5Unified + ArduinoJson
 ### 5. Capture the device screen
 
 The firmware supports the `TGSHOT` serial command through
-`../tools/capture-device-screen.mjs`. It captures the current 466×466 display
-mirror over USB serial and writes a PNG with the round-screen alpha mask:
+`../tools/capture-device-screen.mjs`. It captures the current display mirror
+over USB serial and writes a PNG. The default round-screen alpha mask is for the
+StopWatch; use `--mask none` for compact rectangular targets:
 
 ```sh
 cd ..
 node tools/capture-device-screen.mjs
+node tools/capture-device-screen.mjs --port /dev/cu.usbserial-... --mask none
 ```
 
 Captures are written under `screenshots/`, which is gitignored.
-The round-screen geometry is stored in `../docs/display-geometry.json`.
+The StopWatch round-screen geometry is stored in `../docs/display-geometry.json`.
 
 ## Layout
 
 ```
 firmware/
-├── platformio.ini         M5Stack quickstart config (esp32s3box + StopWatch libs)
+├── platformio.ini         StopWatch and M5StickC Plus2-class build targets
 ├── README.md              this file
 └── src/
     ├── main.cpp           setup + loop, glue
@@ -82,23 +95,36 @@ firmware/
 
 ## What this does (step 5 + 7 + 8 + 9)
 
-When booted, the StopWatch:
+When booted, the device:
 
 1. Connects to the first visible saved WiFi network in `secrets.h`.
 2. Pings the bridge at `PROXY_URL` to confirm it can reach the LAN.
-3. Polls `GET /pet/state` every 30 s and renders the pet face on the round AMOLED (yellow happy / orange hungry / blue sleepy / green sick, with a 4-frame blink animation).
+3. Polls `GET /pet/state` every 5 minutes while active and every 10 minutes while passively asleep, then renders the pet face on the display (yellow happy / orange hungry / blue sleepy / green sick, with a slow 4-frame blink animation while bright).
 4. **KEYA short** while idle opens the device-only transcript history.
 5. **KEYB short** while idle enters voice input mode without recording.
-6. **KEYB short** or tapping the mic starts recording from the MEMS mic. The top of the disc shows `REC` + elapsed seconds + a pulsing red bar. In Auto voice mode, the recorder trims silence and sends after a detected pause; fixed 10/20/30 s caps are still available. **KEYB short** or tapping the mic while recording sends immediately. **KEYA** cancels recording and returns to the pet without uploading.
+6. **KEYB short** or tapping the mic starts recording from the MEMS mic. On compact no-touch targets, use KEYB. The top of the screen shows `REC` + elapsed seconds + a pulsing red bar. In Auto voice mode, the recorder trims silence and sends after a detected pause; fixed 10/20/30 s caps are still available. **KEYB short** or tapping the mic while recording sends immediately. **KEYA** cancels recording and returns to the pet without uploading.
 7. When recording completes, the firmware trims the captured PCM to the detected speech window, muxes it into a 16 kHz/16-bit/mono WAV, and POSTs it as `audio/wav` to `PROXY_URL/transcribe`. Quiet clips are rejected locally without uploading.
 8. The bridge forwards the audio to Groq Whisper and returns `{text, duration_s, lang, ms_groq}`. The firmware stores successful transcripts on the device only for 7 days, capped at 30 entries, then shows the latest transcript word-wrapped across pages; press A or tap the screen to page, B to dismiss.
 9. A short chirp plays for success, a longer low chirp for failure, plus a vibration buzz on success. Sound, volume, brightness, vibration, voice mode, auto-dim, and battery warnings are device settings. A `?` icon shows when the bridge is unreachable.
-10. Polling the bridge every 30 s in the background keeps the mood and food count fresh.
+10. Polling the bridge every 5 minutes in the background keeps the mood and food count fresh.
 11. On boot, if the bridge has a `last_msg` from a previous session, it's shown for 3 s as a "last heard:" greeting.
 12. **KEYB hold** or tapping the outer home ring while idle opens stats view (mood, food today, total tokens, audio runs, WiFi RSSI, bridge host). **KEYA short**, tap, or timeout returns home.
 13. **KEYB short** while stats opens the reset confirm prompt; **KEYB short** or tapping no cancels; **KEYA short** or tapping yes posts `/pet/reset` (new birth time, clear `last_msg`, zero today's audio runs). A success chirp + buzz confirms.
 14. **KEYA + KEYB hold** from pet, voice idle, or stats opens device settings. The settings menu includes Auto/10/20/30 s voice mode, brightness, volume, feedback, auto-dim, and battery status. Use touch to open visible setting chips, **KEYB short** to cycle focus or values, **KEYB hold** to open/return from a selected item, and **KEYA short** to go back or return to the pet.
 15. In transcript history, use **KEYB short** to move older, **KEYA short** or tap to open the selected transcript, **KEYB short** inside a transcript to return to the list, and **KEYB hold** from the list to return to the pet.
+
+The default settings are tuned for battery life: 35% brightness, 40% volume,
+5 minute active pet polling, 10 minute passive asleep polling, direct reconnect
+to the last known-good SSID before scanning, 15 s auto-dim to 1%, display sleep
+after 30 s of safe idle time, Wi-Fi modem sleep enabled, reduced Wi-Fi TX power
+while connected, reduced CPU clock plus passive sleep CPU downclock,
+5 minute asleep Wi-Fi reconnect checks, Wi-Fi radio-off between asleep polls or
+user interactions, MCU light sleep with 5 s passive wake intervals,
+speaker/mic off outside active use, and 300 s battery sampling.
+Saved settings from older firmware versions migrate down to this lower-power
+profile once. The StopWatch target skips MCU light sleep while a USB serial
+host is attached so diagnostics and screen capture stay reliable, but keeps
+light sleep enabled for standalone or power-only use.
 
 ## Buttons
 

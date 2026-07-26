@@ -141,18 +141,21 @@ static void updateStats(size_t rawSamples, size_t startSample, size_t totalSampl
     s_lastStats.zeroCrossings = zeroCrossings;
 }
 
-static void muxToSpeaker() {
+static void endMic() {
     if (s_micActive) {
         M5.Mic.end();
         s_micActive = false;
     }
-    if (!M5.Speaker.isEnabled()) {
+}
+
+static void beginSpeaker() {
+    if (!M5.Speaker.isRunning()) {
         M5.Speaker.begin();
     }
 }
 
 static void muxToMic() {
-    if (M5.Speaker.isEnabled()) {
+    if (M5.Speaker.isRunning()) {
         M5.Speaker.end();
     }
     if (!s_micActive) {
@@ -175,9 +178,9 @@ void init() {
             s_wav = (uint8_t*)malloc(MAX_WAV_BYTES);
         }
     }
-    // Start with the speaker enabled so we can chirp without setup.
-    M5.Speaker.begin();
-    M5.Speaker.setVolume(device_settings::volumeToHardware(s_volumePercent));
+    if (M5.Speaker.isRunning()) {
+        M5.Speaker.end();
+    }
 }
 
 void startRecording(uint32_t maxSeconds) {
@@ -236,7 +239,7 @@ bool stopRecording(const uint8_t** wavOut, size_t* sizeOut) {
         analyzeSlot(s_analyzedSlots++);
     }
     s_recording = false;
-    muxToSpeaker();
+    endMic();
 
     const size_t rawSamples = s_slotIdx * SLOT_SAMPLES;
     const bool enoughSpeech = s_seenVoice && s_voiceSlots * SLOT_MS >= MIN_SPEECH_MS;
@@ -286,7 +289,7 @@ void cancelRecording() {
     if (M5.Mic.isRecording()) {
         while (M5.Mic.isRecording()) delay(5);
     }
-    muxToSpeaker();
+    endMic();
     s_slotIdx = 0;
     s_analyzedSlots = 0;
     s_voiceSlots = 0;
@@ -296,14 +299,17 @@ void cancelRecording() {
 }
 
 void chirp(uint16_t freqHz, uint16_t ms) {
-    muxToSpeaker();
+    endMic();
+    beginSpeaker();
     M5.Speaker.setVolume(device_settings::volumeToHardware(s_volumePercent));
     M5.Speaker.tone(freqHz, ms);
+    delay(ms + 20);
+    M5.Speaker.end();
 }
 
 void setVolumePercent(uint8_t volumePercent) {
     s_volumePercent = device_settings::clampPercent(volumePercent);
-    if (M5.Speaker.isEnabled()) {
+    if (M5.Speaker.isRunning()) {
         M5.Speaker.setVolume(device_settings::volumeToHardware(s_volumePercent));
     }
 }
