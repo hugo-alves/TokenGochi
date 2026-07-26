@@ -16,7 +16,7 @@ import { strict as assert } from "node:assert";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BRIDGE_PORT  = 19000 + Math.floor(Math.random() * 1000);
 const MOCK_PORT    = BRIDGE_PORT + 1;
-const DEVICE_TOKEN = "test-token-" + Date.now();
+const DEVICE_TOKEN = "test-device-token-at-least-32-chars-" + Date.now();
 
 // --- helpers ---------------------------------------------------------------
 function makeWav(durationS = 1.0, sampleRate = 16000) {

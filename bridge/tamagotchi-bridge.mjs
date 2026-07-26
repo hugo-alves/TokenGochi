@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // ============================================================================
 //  Token Tamagotchi — self-contained bridge.
-//  Reads either Codex account usage through the same OAuth endpoint CodexBar
-//  uses, or local JSONL transcripts that Claude Code and Codex CLI write to
-//  disk, and serves:
+//  Reads local JSONL transcripts that Claude Code and Codex CLI write to disk.
+//  An unsupported, read-only Codex account usage mode is available only with
+//  an explicit experimental opt-in. The bridge serves:
 //    GET  /tokens_today   — { tokens_today, breakdown, ts }
 //    GET  /pet/state      — derived pet stats (mood, age, food, last_msg)
 //    GET  /health         — service status, no auth
@@ -35,6 +35,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const PLACEHOLDER_DEVICE_TOKEN = "replace-with-a-random-device-token";
 
 // ---------------------------------------------------------------- env loader --
 // Tiny .env reader. process.env always wins. No dotenv dep, no surprises.
@@ -59,14 +60,17 @@ function loadEnv() {
 loadEnv();
 
 // ---------------------------------------------------------------- config -----
+const HOST               = (process.env.HOST || "127.0.0.1").trim();
 const PORT               = parseInt(process.env.PORT || "8787", 10);
-const DEVICE_TOKEN       = process.env.DEVICE_TOKEN || "the-same-long-random-string-as-the-firmware";
+const DEVICE_TOKEN       = (process.env.DEVICE_TOKEN || "").trim();
 const CACHE_MS           = 30_000;  // re-scan logs at most every 30s
 const INCLUDE_CACHE      = true;    // count cache read/creation tokens as "food" too
 const GROQ_API_KEY       = process.env.GROQ_API_KEY || "";
 const GROQ_WHISPER_MODEL = process.env.GROQ_WHISPER_MODEL || "whisper-large-v3";
 const GROQ_URL           = process.env.GROQ_URL || "https://api.groq.com/openai/v1/audio/transcriptions";
-const TOKEN_USAGE_SOURCE = (process.env.TOKEN_USAGE_SOURCE || "auto").trim().toLowerCase();
+const TOKEN_USAGE_SOURCE = (process.env.TOKEN_USAGE_SOURCE || "local").trim().toLowerCase();
+const EXPERIMENTAL_CODEX_ACCOUNT_USAGE =
+  process.env.EXPERIMENTAL_CODEX_ACCOUNT_USAGE === "1";
 const CODEX_USAGE_SCALE  = Math.max(1, parseInt(process.env.CODEX_USAGE_SCALE || "1000", 10));
 const VERSION            = "0.2.0";
 const ACTIVITY_LOOKBACK_DAYS = 7;
@@ -264,11 +268,6 @@ function wavDurationMs(buf) {
     off += 8 + size;
   }
   return null;
-}
-
-function previewText(value, maxLength = 160) {
-  const singleLine = String(value ?? "").replace(/\s+/g, " ").trim();
-  return singleLine.length > maxLength ? `${singleLine.slice(0, maxLength)}...` : singleLine;
 }
 
 // ---------------------------------------------------------------- io ---------
@@ -562,19 +561,10 @@ async function computeCodex() {
 }
 
 // ----------------------------------------------------------- Codex account ---
-// Matches CodexBar's OAuth strategy:
-//   ~/.codex/auth.json -> https://auth.openai.com/oauth/token when stale
-//   Bearer token       -> https://chatgpt.com/backend-api/wham/usage
-// The API reports account/subscription usage as percentages, not raw tokens.
-const CODEX_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
-const CODEX_OAUTH_REFRESH_URL = "https://auth.openai.com/oauth/token";
+// Experimental and unsupported. This mode reads an existing access token from
+// ~/.codex/auth.json but never refreshes, rewrites, or exports that file.
+// The endpoint is not a public API and may change without notice.
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
-
-function parseCodexLastRefresh(value) {
-  if (!value) return null;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
 
 function readCodexAuth() {
   const authPath = join(primaryCodexHome(), "auth.json");
@@ -586,71 +576,9 @@ function readCodexAuth() {
   }
   const tokens = json.tokens || {};
   const accessToken = tokens.access_token || tokens.accessToken || json.OPENAI_API_KEY || "";
-  const refreshToken = tokens.refresh_token || tokens.refreshToken || "";
-  const idToken = tokens.id_token || tokens.idToken || "";
   const accountId = tokens.account_id || tokens.accountId || "";
   if (!accessToken) throw new Error("Codex auth.json has no access token");
-  return {
-    authPath,
-    accessToken,
-    refreshToken,
-    idToken,
-    accountId,
-    lastRefresh: parseCodexLastRefresh(json.last_refresh),
-    raw: json,
-  };
-}
-
-async function refreshCodexAuth(credentials) {
-  if (!credentials.refreshToken) return credentials;
-  const res = await fetch(CODEX_OAUTH_REFRESH_URL, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      client_id: CODEX_OAUTH_CLIENT_ID,
-      grant_type: "refresh_token",
-      refresh_token: credentials.refreshToken,
-      scope: "openid profile email",
-    }),
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`Codex OAuth refresh failed ${res.status}: ${text.slice(0, 200)}`);
-
-  let payload;
-  try {
-    payload = JSON.parse(text);
-  } catch {
-    throw new Error("Codex OAuth refresh returned invalid JSON");
-  }
-
-  const next = {
-    ...credentials,
-    accessToken: payload.access_token || credentials.accessToken,
-    refreshToken: payload.refresh_token || credentials.refreshToken,
-    idToken: payload.id_token || credentials.idToken,
-    lastRefresh: new Date(),
-  };
-
-  const saved = { ...credentials.raw };
-  saved.tokens = {
-    ...(saved.tokens || {}),
-    access_token: next.accessToken,
-    refresh_token: next.refreshToken,
-  };
-  if (next.idToken) saved.tokens.id_token = next.idToken;
-  if (next.accountId) saved.tokens.account_id = next.accountId;
-  saved.last_refresh = next.lastRefresh.toISOString();
-  writeFileSync(credentials.authPath, JSON.stringify(saved, null, 2));
-  return next;
-}
-
-async function loadFreshCodexAuth() {
-  let credentials = readCodexAuth();
-  const staleAfterMs = 8 * 24 * 60 * 60 * 1000;
-  if (credentials.lastRefresh && Date.now() - credentials.lastRefresh.getTime() <= staleAfterMs) {
-    return credentials;
-  }
-  return refreshCodexAuth(credentials);
+  return { accessToken, accountId };
 }
 
 export function paceStage(deltaPercent) {
@@ -765,7 +693,12 @@ export function accountUsageMetadata(usage) {
 }
 
 async function computeCodexAccountUsage() {
-  const credentials = await loadFreshCodexAuth();
+  if (!EXPERIMENTAL_CODEX_ACCOUNT_USAGE) {
+    throw new Error(
+      "Codex account usage is experimental; set EXPERIMENTAL_CODEX_ACCOUNT_USAGE=1 to opt in"
+    );
+  }
+  const credentials = readCodexAuth();
   const headers = {
     authorization: `Bearer ${credentials.accessToken}`,
     accept: "application/json",
@@ -775,7 +708,7 @@ async function computeCodexAccountUsage() {
 
   const res = await fetch(CODEX_USAGE_URL, { headers });
   const text = await res.text();
-  if (!res.ok) throw new Error(`Codex usage API failed ${res.status}: ${text.slice(0, 200)}`);
+  if (!res.ok) throw new Error(`Codex usage API failed ${res.status}`);
 
   let usage;
   try {
@@ -802,14 +735,14 @@ async function tokensToday() {
   const claudePromise = computeClaude(seen);
   const activityPromise = computeActivity();
   let codexPromise;
-  if (TOKEN_USAGE_SOURCE === "codex-account" || TOKEN_USAGE_SOURCE === "account" || TOKEN_USAGE_SOURCE === "auto") {
-    codexPromise = computeCodexAccountUsage().catch(async (err) => {
-      if (TOKEN_USAGE_SOURCE !== "auto") throw err;
-      console.error(`Codex account usage unavailable, falling back to local logs: ${err.message || err}`);
-      return { codex: await computeCodex(), metadata: { source: "local_logs_fallback", error: String(err.message || err) } };
-    });
-  } else {
+  if (TOKEN_USAGE_SOURCE === "codex-account" || TOKEN_USAGE_SOURCE === "account") {
+    codexPromise = computeCodexAccountUsage();
+  } else if (TOKEN_USAGE_SOURCE === "local") {
     codexPromise = computeCodex().then((codex) => ({ codex, metadata: { source: "local_logs" } }));
+  } else {
+    throw new Error(
+      `unsupported TOKEN_USAGE_SOURCE=${JSON.stringify(TOKEN_USAGE_SOURCE)}; use "local" or "codex-account"`
+    );
   }
   const [claude, codexResult, activity] = await Promise.all([claudePromise, codexPromise, activityPromise]);
   const codex = codexResult.codex;
@@ -849,6 +782,10 @@ async function petState() {
 function authOk(req) {
   return (req.headers.authorization ?? "") === `Bearer ${DEVICE_TOKEN}`;
 }
+export function isValidDeviceToken(value) {
+  const token = String(value ?? "").trim();
+  return token.length >= 32 && token !== PLACEHOLDER_DEVICE_TOKEN;
+}
 function send(res, status, body, contentType = "application/json") {
   res.writeHead(status, { "content-type": contentType });
   res.end(contentType === "application/json" ? JSON.stringify(body) : body);
@@ -862,6 +799,14 @@ async function main() {
       tokens: t,
       pet: { ...s, mood: computeMood(t.tokens_today, new Date(), t.usage) },
     }, null, 2));
+    return;
+  }
+
+  if (!isValidDeviceToken(DEVICE_TOKEN)) {
+    console.error(
+      "DEVICE_TOKEN must be a non-placeholder secret of at least 32 characters; see bridge/.env.example"
+    );
+    process.exitCode = 1;
     return;
   }
 
@@ -956,10 +901,10 @@ async function main() {
           body,
         });
         if (!groqRes.ok) {
-          const errText = await groqRes.text();
-          console.error(`[transcribe:${traceId}] recv groq status=${groqRes.status} body_preview=${JSON.stringify(previewText(errText, 200))}`);
+          await groqRes.arrayBuffer();
+          console.error(`[transcribe:${traceId}] recv groq status=${groqRes.status}`);
           log(502);
-          return send(res, 502, { error: `groq ${groqRes.status}: ${errText.slice(0, 200)}` });
+          return send(res, 502, { error: `groq ${groqRes.status}` });
         }
         const groqJson = await groqRes.json();
         const text = groqJson.text ?? "";
@@ -967,7 +912,7 @@ async function main() {
         console.log(
           `[transcribe:${traceId}] recv groq ok text_len=${String(text).length}` +
           ` lang=${JSON.stringify(groqJson.language ?? null)} duration_ms=${durationMs}` +
-          ` ms_groq=${msGroq} text_preview=${JSON.stringify(previewText(text))}`
+          ` ms_groq=${msGroq}`
         );
         recordTranscription(text);
         log(200);
@@ -981,13 +926,13 @@ async function main() {
       log(404);
       return send(res, 404, { error: "not found" });
     } catch (e) {
-      console.error(e);
+      console.error(e instanceof Error ? e.message : String(e));
       log(502);
-      return send(res, 502, { error: String(e) });
+      return send(res, 502, { error: "bridge request failed" });
     }
-  }).listen(PORT, () => {
+  }).listen(PORT, HOST, () => {
     loadState(); // make sure state.json exists at boot
-    console.log(`token-tamagotchi bridge v${VERSION} listening on :${PORT} (token ${DEVICE_TOKEN.slice(0, 6)}…)`);
+    console.log(`token-tamagotchi bridge v${VERSION} listening on ${HOST}:${PORT}`);
   });
 }
 

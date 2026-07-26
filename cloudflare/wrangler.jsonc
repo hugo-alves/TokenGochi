@@ -13,7 +13,7 @@
         {
           "binding": "DB",
           "database_name": "tokengochi-staging",
-          "database_id": "c01ad75f-6678-4a39-838d-172fdc35811c"
+          "database_id": "00000000-0000-0000-0000-000000000000"
         }
       ],
       "vars": {

@@ -33,6 +33,7 @@ function loadEnv() {
 loadEnv();
 
 const PORT = Number.parseInt(process.env.TOKEN_SOURCE_PORT || "8790", 10);
+const HOST = (process.env.TOKEN_SOURCE_HOST || "127.0.0.1").trim();
 const TOKEN_SOURCE_TOKEN = (process.env.TOKEN_SOURCE_TOKEN || "").trim();
 const VERSION = "0.1.0";
 const BRIDGE_CMD = [process.execPath, join(__dirname, "tamagotchi-bridge.mjs"), "--once"];
@@ -54,7 +55,7 @@ function readSnapshot() {
 
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error(`bridge --once failed with code ${result.status}: ${result.stderr || result.stdout}`);
+    throw new Error(`bridge --once failed with code ${result.status}`);
   }
 
   let parsed;
@@ -66,7 +67,7 @@ function readSnapshot() {
 
   const tokens = parsed?.tokens;
   if (!tokens || typeof tokens.tokens_today !== "number") {
-    throw new Error(`unexpected bridge payload: ${result.stdout.slice(0, 200)}`);
+    throw new Error("unexpected bridge payload");
   }
 
   return {
@@ -118,10 +119,10 @@ createServer((req, res) => {
     log(200);
     return send(res, 200, snapshot);
   } catch (err) {
-    console.error(err);
+    console.error(err instanceof Error ? err.message : String(err));
     log(502);
-    return send(res, 502, { error: String(err instanceof Error ? err.message : err) });
+    return send(res, 502, { error: "token snapshot unavailable" });
   }
-}).listen(PORT, () => {
-  console.log(`tokengochi token source v${VERSION} listening on :${PORT}`);
+}).listen(PORT, HOST, () => {
+  console.log(`tokengochi token source v${VERSION} listening on ${HOST}:${PORT}`);
 });

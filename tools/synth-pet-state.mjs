@@ -11,8 +11,9 @@
 //    node tools/synth-pet-state.mjs [options]
 //
 //  Options:
+//    --host 127.0.0.1    bind address (default loopback)
 //    --port 8788          port to listen on (default 8788, avoid clash w/ real)
-//    --token ...          bearer token (default matches bridge default)
+//    --token ...          bearer token (default is local-development only)
 //    --mood happy         initial mood; overridden by --cycle
 //    --food 10000         food_today
 //    --age 3600           age in seconds since pet "birth"
@@ -28,8 +29,9 @@
 import { createServer } from "node:http";
 
 const args = parseArgs(process.argv.slice(2));
+const HOST          = args.host ?? "127.0.0.1";
 const PORT          = parseInt(args.port ?? "8788", 10);
-const TOKEN         = args.token ?? "the-same-long-random-string-as-the-firmware";
+const TOKEN         = args.token ?? "local-dev-device-token-not-for-production-0001";
 const FIXED_MOOD    = args.mood ?? "happy";
 const FOOD          = parseInt(args.food ?? "10000", 10);
 const AGE_S         = parseInt(args.age ?? "3600", 10);
@@ -115,11 +117,10 @@ createServer((req, res) => {
   }
 
   send(res, 404, { error: "not found" });
-}).listen(PORT, () => {
+}).listen(PORT, HOST, () => {
   const moodDesc = CYCLE_MS ? `cycling every ${CYCLE_MS}ms` : `fixed=${FIXED_MOOD}`;
-  console.log(`synthetic bridge on :${PORT} — ${moodDesc}, food=${FOOD}, age=${AGE_S}s`);
-  console.log(`  token: ${TOKEN.slice(0, 8)}…`);
-  console.log(`  try:   curl -H 'Authorization: Bearer ${TOKEN}' http://localhost:${PORT}/pet/state`);
+  console.log(`synthetic bridge on ${HOST}:${PORT} — ${moodDesc}, food=${FOOD}, age=${AGE_S}s`);
+  console.log(`  try: curl -H 'Authorization: Bearer <token>' http://${HOST}:${PORT}/pet/state`);
 });
 
 // --- arg parser (no deps) --------------------------------------------------

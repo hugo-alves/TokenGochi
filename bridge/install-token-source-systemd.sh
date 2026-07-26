@@ -18,6 +18,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
   echo "copy .env.example to .env and set TOKEN_SOURCE_TOKEN first" >&2
   exit 1
 fi
+chmod 600 "$ENV_FILE"
 
 TOKEN_SOURCE_TOKEN="$(sed -n 's/^TOKEN_SOURCE_TOKEN=//p' "$ENV_FILE" | head -n 1 | tr -d '\r')"
 if [[ -z "$TOKEN_SOURCE_TOKEN" ]]; then

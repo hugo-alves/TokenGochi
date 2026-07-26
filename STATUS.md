@@ -1,377 +1,61 @@
-# Status — `2026-06-10`
+# Project status
 
-## TL;DR
+TokenGochi is a public-beta-quality hardware project, not a turnkey consumer
+product. It has three independently deployable surfaces:
 
-Latest verified firmware work adds a first-class device settings area with
-Auto/10/20/30 s voice mode, brightness, volume, feedback, auto-dim, and
-battery status, then refines those screens with a settings-specific visual
-hierarchy. Auto voice mode trims silence, keeps a short pre-roll, stops after a
-detected voice pause, and rejects quiet clips locally before upload.
-The firmware builds, native settings tests pass, the connected StopWatch was
-flashed on `/dev/cu.usbmodem1101`, WiFi joined `DIGI_Z6esTz`, and the bridge
-responded with HTTP 200. Settings and battery screenshots were captured from
-the physical framebuffer. Manual physical button/touch navigation through all
-settings screens is still not verified.
+- `firmware/`: M5Stack StopWatch and compact M5StickC-class firmware.
+- `bridge/`: local token scanning, pet state, and optional Groq transcription.
+- `cloudflare/`: optional Worker and D1 backend for HTTPS device access.
 
-## Device Settings and Battery Status — `2026-06-10`
+## Current capabilities
 
-Verified changes:
+- Two documented firmware targets with battery-oriented defaults.
+- Local Claude Code and Codex CLI transcript-log token counting.
+- Authenticated local bridge and VPS token-source endpoints.
+- Optional Cloudflare ingestion, persistence, and transcription proxy.
+- Device settings, voice capture, transcript history, battery status, and
+  serial framebuffer capture.
 
-- Settings model defaults and normalization are covered by native Unity tests.
-- Settings persist through the ESP32 Preferences/NVS wrapper under the
-  `tg_settings` namespace.
-- Device settings include Auto/10/20/30 s voice mode, brightness, volume,
-  sound feedback, vibration feedback, auto-dim, and battery warnings.
-- Auto voice mode uses slot-level voice activity detection, pre-roll, trailing
-  padding, silence trimming, pause-based auto-stop, and local quiet-clip
-  rejection before `/transcribe`.
-- Brightness applies through `M5.Display.setBrightness()` and volume applies
-  through the existing audio abstraction before chirps.
-- Battery status samples through M5Unified power APIs and displays percentage,
-  voltage, charge state, and warning state.
-- Low-battery warning state is non-modal and limited to safe glanceable modes.
-- Auto-dim is configurable and only dims idle-like modes; active workflows stay
-  bright.
-- A serial-only debug hook was added for repeatable screenshots:
-  `TGSETTINGS` and `TGSETTING VOICE|BRIGHT|VOLUME|FEEDBACK|DIM|BATTERY`.
+## Security defaults
 
-Checks and device evidence:
+- The local bridge and token source bind to loopback unless explicitly exposed.
+- The bridge refuses missing, short, or placeholder device tokens.
+- Secrets and runtime state are gitignored and installers restrict local secret
+  files to the current user.
+- Transcript text, bearer tokens, and upstream response bodies are not logged.
+- Codex account-usage access is unsupported, read-only, disabled by default,
+  and requires explicit experimental opt-in.
 
-- `cd firmware && ../tools/pio test -e native` passed with 7/7 tests.
-- `cd firmware && ../tools/pio run` passed for `m5stack-stopwatch`.
-- `cd firmware && ../tools/pio run -t upload` flashed `/dev/cu.usbmodem1101`.
-- Serial boot evidence showed the watch joined `DIGI_Z6esTz`, received
-  `192.168.1.243`, and reached the bridge with HTTP 200.
-- Serial battery evidence from the final flash showed `percent=100`,
-  `voltage=4166`, `charge=battery`, and `warning=ok`.
-- Serial display-policy evidence from the final flash showed settings timed out
-  back to the pet and auto-dim applied `percent=35`.
-- Physical framebuffer screenshots were captured:
-  `screenshots/settings-menu-ux-2026-06-10.png`,
-  `screenshots/settings-voice-ux-2026-06-10.png`,
-  `screenshots/settings-screen-ux-2026-06-10.png`,
-  `screenshots/settings-volume-ux-2026-06-10.png`,
-  `screenshots/settings-feedback-ux-2026-06-10.png`,
-  `screenshots/settings-auto-dim-ux-2026-06-10.png`, and
-  `screenshots/settings-battery-ux-2026-06-10.png`.
+## Verification
 
-Not verified yet:
+The release checklist is:
 
-- Manual physical A+B/button/touch traversal through every settings screen.
-  The screenshots above were driven by the serial debug hook.
-- Battery behavior at low/critical charge levels and while explicitly running
-  on battery power away from USB.
-
-## Voice Mode Separation — `2026-06-09`
-
-Local firmware build, upload, boot, and pet-screen capture are verified. Real
-StopWatch button-transition behavior is not verified yet.
-
-Verified by code inspection and build:
-
-- Firmware state initializes in TokenGochi pet mode.
-- **KEYB short** from pet mode enters voice input mode without starting the
-  mic.
-- **KEYB short** from voice input mode starts recording.
-- **KEYA** from voice input mode returns to the pet.
-- **KEYA** while recording cancels recording and returns to the pet without
-  posting audio.
-- **KEYB short** while recording finishes capture and posts the WAV for
-  transcription.
-- **KEYB hold** from pet mode preserves access to stats/reset.
-- `cd firmware && /Users/hugoalves/Code/TokenGochi/firmware/.venv/bin/pio run`
-  passed.
-
-Verified on the connected StopWatch:
-
-- `cd firmware && /Users/hugoalves/Code/TokenGochi/firmware/.venv/bin/pio run -t upload`
-  flashed the connected StopWatch on `/dev/cu.usbmodem1101`.
-- Serial boot evidence showed the watch joined `DIGI_Z6esTz`, received
-  `192.168.1.243`, and reached the bridge with HTTP 200.
-- Screen capture
-  `screenshots/tokengochi-2026-06-09T10-10-42-482Z.png` showed the pet face
-  after the final flash and boot.
-- A 90 second serial-listener window was run for manual button-transition
-  verification, but no button-transition logs were captured during that window.
-
-Not verified yet:
-
-- Physical StopWatch button timing and debounce for short-vs-hold KEYB.
-- Device screen captures for the voice-ready, recording, stats, and transcript
-  states.
-- Serial-monitor evidence that the first KEYB press enters voice mode with
-  `mic=0` and no `/transcribe` request.
-
-## Watch State Retry Fix — `2026-06-09`
-
-The visible `bridge ? retrying` screen was diagnosed as stale firmware wording
-for backend state polling, not a voice-mode dependency. Serial evidence showed
-the watch reached `/health` successfully, then a later `/pet/state` poll failed
-with ESP HTTP `-11` (read timeout).
-
-Verified changes:
-
-- Firmware offline/status labels now say `api` instead of `bridge`.
-- Cloudflare staging `/pet/state` and `/tokens_today` no longer await a stale
-  token-source refresh before responding to the watch; they queue that refresh
-  in the Worker background and return the latest stored D1 state.
-- `cd cloudflare && npm run build` passed with the staging binding.
-- `cd cloudflare && npm run deploy:staging` deployed staging Worker version
-  `3a718bf2-9559-41e9-92ae-d356112333b9`.
-- `cd firmware && /Users/hugoalves/Code/TokenGochi/firmware/.venv/bin/pio run`
-  passed.
-- `cd firmware && /Users/hugoalves/Code/TokenGochi/firmware/.venv/bin/pio run -t upload`
-  flashed `/dev/cu.usbmodem1101`.
-- Serial monitor after the deploy and flash captured two successful state polls:
-  `food=37000` and `food=37500`.
-- Screen capture
-  `screenshots/tokengochi-2026-06-09T10-22-04-512Z.png` showed the pet screen
-  with `37.5% use`, not the retry screen.
-
-Not verified yet:
-
-- Long-run stability over multiple token-source refresh cycles.
-- Production Worker behavior; only staging was deployed.
-
-## Codex Account Usage Migration — `2026-06-09`
-
-Implementation is deployed to staging, the VPS token source is updated, and
-the physical StopWatch display is verified.
-
-Verified behavior:
-
-- CodexBar source investigation showed account usage comes from Codex OAuth
-  credentials in `~/.codex/auth.json` and the ChatGPT backend usage endpoint,
-  which returns rate-limit percentages rather than raw tokens.
-- VPS `deployer@100.78.209.61` can call that account endpoint using its own
-  Codex login and reports plan `pro`.
-- `bridge/tamagotchi-bridge.mjs --once` now returns `usage.source:
-  "codex_account"` by default in `TOKEN_USAGE_SOURCE=auto`.
-- Account percentages are mapped to the existing integer contract as
-  `metric_used_percent * 1000`, while `usage.codex.metric_used_percent`
-  preserves the real account percentage.
-- Staging D1 migration `0002_token_usage_metadata.sql` is applied.
-- Staging Worker deploy `0f45a11e-6539-4b70-8b10-ea460751336e` is live.
-- End-to-end smoke passed:
-  source total `27500`, Worker pull total `27500`, and `/pet/state`
-  `food_today=27500`, `usage.source="codex_account"`,
-  `metric_used_percent=27.5`.
-- Firmware was rebuilt and uploaded to the StopWatch. Screen capture
-  `screenshots/codex-account-percent-verified.png` shows `27.5% use` and
-  `happy`.
-
-Checks passed:
-
-- `node bridge/_test_pure.mjs`
-- `node bridge/_test_token_source.mjs`
-- `node bridge/_test_transcribe.mjs`
-- `cd cloudflare && npm run build`
-- `cd firmware && /Users/hugoalves/Code/TokenGochi/firmware/.venv/bin/pio run`
-- `TOKEN_SOURCE_TOKEN=... node tools/cloud-vps-smoke.mjs`
-- `git diff --check`
-
-Production deployment remains not verified.
-
-## Codex Pace Mood — `2026-06-09`
-
-Implementation is deployed to staging, the VPS token source is updated, and
-the physical StopWatch display is verified.
-
-Verified behavior:
-
-- CodexBar pace logic was traced to `UsagePace.weekly` and
-  `CodexHistoricalPaceEvaluator`. CodexBar uses historical weekly curves when
-  enough samples exist, otherwise falls back to a linear expected pace through
-  the reset window.
-- TokenGochi now computes the same linear pace fallback for Codex account
-  weekly usage and exposes it as `usage.codex.pace`.
-- CodexBar's stage thresholds are reproduced: on track within 2%, slight within
-  6%, ahead/behind within 12%, and far ahead/behind beyond 12%.
-- Mood now follows pace for Codex account usage with a nuanced ladder:
-  `peckish`, `hungry`, `very hungry`, `happy`, `excited`, and `very happy`.
-- VPS one-shot snapshot returned `pace.stage="far_behind"`,
-  `expected_used_percent=72.5`, `actual_used_percent=27`, and mood `hungry`.
-- Staging Worker deploy `9c435044-6c6f-477f-9091-0880d32a1fcf` is live.
-- Staging `/pet/state` returned `mood="very hungry"`, `metric_used_percent=29.5`,
-  and `pace.stage="far_behind"`.
-- Firmware was rebuilt and uploaded. Screen capture
-  `screenshots/codex-pace-very-hungry-verified.png` shows `29.5% use` and
-  `very hungry`.
-
-Checks passed:
-
-- `node bridge/_test_pure.mjs`
-- `node bridge/_test_token_source.mjs`
-- `node bridge/_test_transcribe.mjs`
-- `cd cloudflare && npm run build`
-- `cd firmware && /Users/hugoalves/Code/TokenGochi/firmware/.venv/bin/pio run`
-- `TOKEN_SOURCE_TOKEN=... node tools/cloud-vps-smoke.mjs`
-
-Historical CodexBar-style pace is not implemented yet. TokenGochi currently
-uses the same linear fallback CodexBar uses when historical data is unavailable.
-
-## VPS Token Source Migration — `2026-06-09`
-
-Implementation is deployed to staging and the live VPS pull path is verified.
-
-Verified locally:
-
-- `bridge/token-source.mjs` serves authenticated VPS token snapshots from the
-  existing Codex/Claude log scanner.
-- Cloudflare Worker code can pull from `TOKEN_SOURCE_URL`, persist snapshots,
-  refresh on a cron, and opportunistically refresh stale token state before
-  watch reads.
-- `tools/cloud-vps-smoke.mjs` verifies source health, source tokens, Worker
-  pull, and `/pet/state` consistency without printing secrets.
-- `tools/rollout-vps-token-source.mjs` defaults to dry-run, requires
-  `--apply --yes` before changing the VPS or Tailscale Funnel, and reuses the
-  existing VPS token-source secret on later deploys.
-- Local checks passed:
-  `node bridge/_test_token_source.mjs`,
-  `node bridge/_test_pure.mjs`,
-  `node bridge/_test_transcribe.mjs`,
-  and `cd cloudflare && npm run build`.
-
-Verified VPS facts:
-
-- Tailscale address: `100.78.209.61`.
-- SSH user/path: `deployer@100.78.209.61`.
-- Hostname: `ubuntu-4gb-fsn1-1`.
-- Tailscale DNS name: `g33k-kid-agent.taild47216.ts.net`.
-- Node is available on the VPS.
-- `tokengochi-token-source.service` is installed, enabled, and active.
-- Local VPS `GET http://127.0.0.1:8790/health` returns
-  `{"ok":true,"version":"0.1.0"}`.
-- Unauthenticated local VPS `GET /tokens_today` returns 401.
-- Authenticated local VPS `GET /tokens_today` returns a token snapshot.
-- Tailscale Funnel is active at `https://g33k-kid-agent.taild47216.ts.net` and
-  proxies to `http://127.0.0.1:8790`.
-- Public `GET https://g33k-kid-agent.taild47216.ts.net/health` returns
-  `{"ok":true,"version":"0.1.0"}`.
-- Cloudflare staging secrets `TOKEN_SOURCE_URL` and `TOKEN_SOURCE_TOKEN` are
-  set, and staging deploy `fa0d2dca-3ba3-4b84-b34d-8bf87cf5a983` is live.
-- `node tools/cloud-vps-smoke.mjs` passed against staging with the VPS source:
-  source health OK, Worker health OK with `token_source_configured=true`,
-  Worker `/ingest/pull` returned the VPS token snapshot, and `/pet/state`
-  matched that snapshot.
-
-Physical StopWatch verification:
-
-- Mac `com.tokengochi.ingest` was removed from launchd and stayed absent after
-  an 80 second check; only `com.tokengochi.bridge` remained.
-- Firmware was rebuilt and uploaded with the staging `PROXY_URL`.
-- Serial monitor showed WiFi connected with IP `192.168.1.243`.
-- Serial monitor showed Cloudflare bridge health OK with HTTP 200.
-- Serial monitor showed a pet-state poll matching the VPS-backed staging state:
-  `mood=hungry food=0 age=5103 ts=1780993452`.
-- Device screen capture `screenshots/vps-cloud-verified.png` shows `0k tk`
-  and hungry state, matching the VPS source rather than the old Mac total.
-
-Not verified yet:
-
-- Production deployment. The verified path is staging only.
-
-## What's working
-
-- **Bridge**: `com.tokengochi.bridge` running on `:8787`. Returns
-  `{"ok":true,"version":"0.2.0","groq_configured":false}`. `/pet/state`
-  returns a complete payload. `/transcribe` returns 503 because no
-  `GROQ_API_KEY` is set (the bridge keeps working — `/pet/state` still
-  serves). `/pet/reset` works (verified `age_s` dropped from 9712 → 1).
-- **Tests**: `node bridge/_test_pure.mjs` (11/11),
-  `node bridge/_test_transcribe.mjs` (6/6).
-- **Firmware**: `pio run` clean. 1.30 MB / 16 MB flash, 50 KB / 320 KB RAM.
-  Booted on the device:
-  ```
-  [boot] token tamagotchi
-  [boot] M5 ok, heap=317484 psram=8386215
-  [wifi] reconnecting...
-  ```
-  8 MB PSRAM detected, M5Unified stack initialized correctly.
-
-## What's not working
-
-### The watch can't stay on the WiFi
-
-The diagnostic log shows the ESP32 associates with the AP on channel 1
-(correct — 2.4 GHz), then is immediately deauthed:
-
-```
-[wifi] connected to AP (channel 1)
-[wifi] DISCONNECTED reason=8 (SSID='Parada Clientes')
-[wifi] connected to AP (channel 1)
-[wifi] DISCONNECTED reason=8 (SSID='Parada Clientes')
-... (repeats forever)
+```sh
+node bridge/_test_pure.mjs
+node bridge/_test_token_source.mjs
+node bridge/_test_transcribe.mjs
+cd cloudflare && npm run build
+cd ../firmware && ../tools/pio test -e native
+cd .. && gitleaks git . --redact
 ```
 
-`reason=8` is `WIFI_REASON_DISASSOCIATED` (the AP pushed us off after
-we joined). This is *not* a credentials problem — the password and SSID
-are correct, authentication succeeds, the firmware briefly associates
-on the correct 2.4 GHz channel.
+Firmware builds should also pass for both documented targets:
 
-The watch also *never* logs `[wifi] got ip:`, so DHCP never completes.
-
-### Why this happens
-
-The Mac's `airport` and `networksetup` reports show the device sees
-exactly one preferred network named `Parada Clientes-5G`. The 2.4 GHz
-sibling `Parada Clientes` was on the list the user gave me, but isn't
-in the Mac's preferred-network list (the Mac has never joined it).
-
-Likely cause: the network has a **captive portal**. Public/café WiFi in
-Spain (MEO, DIGI, etc.) commonly requires opening a browser and
-accepting terms. The StopWatch has no browser, so the AP authenticates
-the device (association + 4-way handshake succeed) but the AP
-controller deauths it after a few seconds when the portal flow isn't
-satisfied. The pattern of "associate → 8 → reconnect" is the signature
-of this.
-
-Other possibilities:
-1. **DHCP exhaustion / no IP assigned** — the router simply doesn't
-   hand out an address to a device that hasn't done a portal flow.
-2. **MAC filter / client isolation** — same effect.
-3. **AP rejects clients with no user-agent / no http traffic** — captive
-   portals rely on a HTTP redirect; if the device doesn't make one, the
-   controller kicks it.
-
-## How to unblock
-
-In order of how fast each is to try:
-
-1. **Use an iPhone personal hotspot** (you have "Hugo's iPhone" in
-   the network list). No captive portal, plain WPA2, plain DHCP.
-   Change `WIFI_SSID` to that, rebuild + flash, and the pet should
-   appear on the AMOLED.
-2. **Use any home router** (MEO-68B8A0, TP-Link_7500, MORECOFFEE, etc.)
-   with a known password. Same flow.
-3. **Skip the café network**. The 2.4 GHz `Parada Clientes` is
-   almost certainly a captive portal — the device physically can't
-   complete the auth flow.
-
-## What I changed about the firmware for diagnostics
-
-While debugging, I added a WiFi event handler and a one-time scan in
-`firmware/src/main.cpp` to surface the actual failure mode. Should be
-removed once WiFi works:
-
-- `WiFi.onEvent(...)` prints `STA_START / CONNECTED / GOT_IP / DISCONNECTED`
-  events with reason codes
-- After `WiFi.begin()` fails, a scan is run and prints whether the
-  target SSID is visible to the ESP32 at all
-
-These cost ~100 bytes of flash and a few ms of startup time. Safe to
-leave in for now; can be stripped if it gets in the way.
-
-## Files
-
-```
-PLAN.md            design (13 sections, all decisions resolved)
-README.md          one-page first-run guide
-STATUS.md          this file
-bridge/            zero-dep service, 537 LOC, 16 tests passing
-tools/             dev utilities
-firmware/          PlatformIO project for the StopWatch Dev Kit
+```sh
+cd firmware
+../tools/pio run -e m5stack-stopwatch
+../tools/pio run -e m5stickc-plus2
 ```
 
-All committed to a fresh `main` branch in 4 logical commits (PLAN →
-bridge → tools → firmware).
+Physical-device behavior, battery-life claims, staging, and production must be
+reported as verified only when backed by current device or live-environment
+evidence.
+
+## Known limitations
+
+- The account-usage endpoint is not a supported public API and may change.
+- Voice transcription sends audio to the configured Groq endpoint.
+- Users must provide their own Wi-Fi credentials, bearer tokens, Worker URL,
+  D1 database IDs, Cloudflare secrets, and optional Groq key.
+- Production deployment and hardware-specific behavior are environment-owned;
+  this repository does not ship shared production credentials or infrastructure.

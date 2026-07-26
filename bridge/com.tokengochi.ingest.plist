@@ -38,12 +38,6 @@
     <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
     <key>NODE_ENV</key>
     <string>production</string>
-    <key>CLOUDFLARE_WORKER_URL</key>
-    <string>__WORKER_URL__</string>
-    <key>INGEST_TOKEN</key>
-    <string>__INGEST_TOKEN__</string>
-    <key>INGEST_INTERVAL_MS</key>
-    <string>__INGEST_INTERVAL_MS__</string>
   </dict>
 </dict>
 </plist>

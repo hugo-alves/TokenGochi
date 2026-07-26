@@ -59,13 +59,10 @@ Run `bridge/token-source.mjs` on the VPS where Codex is logged in. It reads the
 VPS-local `~/.codex` / `~/.claude` logs by shelling out to
 `tamagotchi-bridge.mjs --once` and serves only token snapshots.
 
-The VPS Tailscale IP is useful for operator SSH, but a Cloudflare Worker cannot
-fetch that private tailnet address directly. Expose the token source through
-Cloudflare Tunnel, Tailscale Funnel, or another HTTPS route, then set the
-Worker `TOKEN_SOURCE_URL` to that public HTTPS URL. For the currently verified
-VPS at `100.78.209.61`, read-only checks showed the Tailscale DNS name
-`g33k-kid-agent.taild47216.ts.net`, so the expected Funnel base URL is
-`https://g33k-kid-agent.taild47216.ts.net` after Funnel is enabled.
+The VPS tailnet address is useful for operator SSH, but a Cloudflare Worker
+cannot fetch that private address directly. Keep the token source bound to
+loopback and expose it through Cloudflare Tunnel, Tailscale Funnel, or another
+authenticated HTTPS route. Then set `TOKEN_SOURCE_URL` to that public URL.
 
 Required Worker values:
 
@@ -98,6 +95,11 @@ The guarded rollout helper prints the same VPS commands by default and only
 executes them when passed both `--apply` and `--yes`:
 
 ```sh
-node ../tools/rollout-vps-token-source.mjs
-node ../tools/rollout-vps-token-source.mjs --apply --yes
+VPS=user@host TOKEN_SOURCE_URL=https://source.example.com \
+  node ../tools/rollout-vps-token-source.mjs
+VPS=user@host TOKEN_SOURCE_URL=https://source.example.com \
+  node ../tools/rollout-vps-token-source.mjs --apply --yes
 ```
+
+Replace the zero UUIDs in `wrangler.jsonc` with D1 database IDs from your own
+Cloudflare account before deploying.

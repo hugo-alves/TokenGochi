@@ -11,10 +11,21 @@ import {
   activityStage,
   codexCumulative,
   computeMood as bridgeComputeMood,
+  isValidDeviceToken,
   latestActivityMs,
   paceBalance,
   paceStage,
 } from "./tamagotchi-bridge.mjs";
+
+// --- server secret validation ----------------------------------------------
+assert.equal(isValidDeviceToken(""), false);
+assert.equal(isValidDeviceToken("short-token"), false);
+assert.equal(isValidDeviceToken("replace-with-a-random-device-token"), false);
+assert.equal(
+  isValidDeviceToken("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+  true
+);
+console.log("device token validation: 4/4 ok");
 
 // --- mood (re-implemented here; the live one is module-private) ------------
 function computeMood(foodToday, now = new Date()) {

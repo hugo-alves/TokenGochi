@@ -406,23 +406,6 @@ static uint32_t wavDurationMs(size_t wavSize) {
     return (uint32_t)(((wavSize - 44) * 1000UL) / 32000UL);
 }
 
-static void logBodyPreview(const char* tag, const char* body, size_t bodyLen) {
-    if (!body || bodyLen == 0) return;
-    size_t previewLen = bodyLen;
-    if (previewLen > 240) previewLen = 240;
-
-    char preview[241];
-    memcpy(preview, body, previewLen);
-    preview[previewLen] = '\0';
-    for (size_t i = 0; i < previewLen; ++i) {
-        if (preview[i] == '\r' || preview[i] == '\n') preview[i] = ' ';
-    }
-    Serial.printf("[transcribe:%s] body_preview=\"%s\"%s\n",
-                  tag,
-                  preview,
-                  bodyLen > previewLen ? "..." : "");
-}
-
 static void drawBootScreen(const char* line2, uint16_t color) {
     ui::clearToBlack();
 #if TOKENGOCHI_COMPACT_UI
@@ -1360,7 +1343,6 @@ static void transcribeAndShow(const uint8_t* wav, size_t size) {
     int code = net::postTranscribe(wav, size, body, sizeof(body), &bodyLen);
     Serial.printf("[transcribe:res] wav=%u code=%d bodyLen=%u\n",
                   (unsigned)size, code, (unsigned)bodyLen);
-    logBodyPreview(code == 200 ? "res" : "err", body, bodyLen);
 
     if (code == 200) {
         char text[TRANSCRIPT_LOG_TEXT_BYTES];
@@ -1369,7 +1351,10 @@ static void transcribeAndShow(const uint8_t* wav, size_t size) {
         extractTranscriptResult(body, text, sizeof(text),
                                 &durationSeconds, lang, sizeof(lang));
         if (text[0]) {
-            Serial.printf("[transcribe] text=%s\n", text);
+            Serial.printf("[transcribe] text_len=%u lang=%s duration_ms=%u\n",
+                          (unsigned)strlen(text),
+                          lang[0] ? lang : "unknown",
+                          (unsigned)(durationSeconds * 1000.0f));
             strncpy(g_lastTranscript, text, sizeof(g_lastTranscript) - 1);
             g_lastTranscript[sizeof(g_lastTranscript) - 1] = '\0';
             snprintf(g_transcriptTitle, sizeof(g_transcriptTitle), "transcript");

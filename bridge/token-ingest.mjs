@@ -24,7 +24,7 @@ function loadEnv() {
       process.env[m[1]] = m[2].replace(/^["']|["']$/g, "").trim();
     }
   } catch {
-    // .env is optional; launchd bakes required values into the plist.
+    // .env is optional when the service manager provides every required value.
   }
 }
 loadEnv();
@@ -55,7 +55,7 @@ function readSnapshot() {
 
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error(`bridge --once failed with code ${result.status}: ${result.stderr || result.stdout}`);
+    throw new Error(`bridge --once failed with code ${result.status}`);
   }
 
   let parsed;
@@ -66,7 +66,7 @@ function readSnapshot() {
   }
   const tokens = parsed?.tokens;
   if (!tokens || typeof tokens.tokens_today !== "number") {
-    throw new Error(`unexpected bridge payload: ${result.stdout.slice(0, 200)}`);
+    throw new Error("unexpected bridge payload");
   }
   return {
     tokens_today: Math.max(0, Math.floor(tokens.tokens_today)),
@@ -89,8 +89,8 @@ async function publish(snapshot) {
     body: JSON.stringify(snapshot),
   });
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`POST ${WORKER_URL}/ingest/tokens -> ${res.status}: ${text}`);
+    await res.arrayBuffer();
+    throw new Error(`POST ${WORKER_URL}/ingest/tokens -> ${res.status}`);
   }
 }
 

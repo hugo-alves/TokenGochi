@@ -33,8 +33,8 @@ const args = new Set(process.argv.slice(2));
 const apply = args.has("--apply");
 const yes = args.has("--yes");
 const deployStaging = args.has("--deploy-staging");
-const vps = valueArg("--vps") || process.env.VPS || "deployer@100.78.209.61";
-const sourceUrl = (valueArg("--source-url") || process.env.TOKEN_SOURCE_URL || "https://g33k-kid-agent.taild47216.ts.net").replace(/\/+$/, "");
+const vps = valueArg("--vps") || process.env.VPS || "";
+const sourceUrl = (valueArg("--source-url") || process.env.TOKEN_SOURCE_URL || "").replace(/\/+$/, "");
 const workerUrl = (valueArg("--worker-url") || process.env.CLOUDFLARE_WORKER_URL || "").replace(/\/+$/, "");
 const deviceToken = process.env.DEVICE_TOKEN || "";
 const ingestToken = process.env.INGEST_TOKEN || "";
@@ -104,6 +104,10 @@ if (deployStaging && (!workerUrl || !deviceToken || !ingestToken)) {
   console.error("--deploy-staging requires CLOUDFLARE_WORKER_URL, DEVICE_TOKEN, and INGEST_TOKEN in the environment");
   process.exit(1);
 }
+if (!vps || !sourceUrl) {
+  console.error("set VPS and TOKEN_SOURCE_URL, or pass --vps=... and --source-url=...");
+  process.exit(1);
+}
 
 if (!tokenSourceToken && apply) {
   tokenSourceToken = capture(`ssh ${shQuote(vps)} 'sed -n "s/^TOKEN_SOURCE_TOKEN=//p" ~/TokenGochi/bridge/.env 2>/dev/null | head -n 1 | tr -d "\\r"'`);
@@ -115,7 +119,7 @@ if (!tokenSourceToken) {
 console.log(`mode: ${apply ? "apply" : "dry-run"}`);
 console.log(`target VPS: ${vps}`);
 console.log(`token source URL: ${sourceUrl}`);
-console.log(`token source token: ${tokenSourceToken.slice(0, 6)}...${tokenSourceToken.slice(-4)}`);
+console.log("token source token: configured");
 
 run(`ssh ${shQuote(vps)} 'mkdir -p ~/TokenGochi/bridge'`);
 run([

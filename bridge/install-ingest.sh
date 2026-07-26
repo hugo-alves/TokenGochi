@@ -1,6 +1,7 @@
 #!/bin/sh
 # install-ingest.sh — install token-ingest as a launchd agent.
 set -e
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLIST_SRC="$SCRIPT_DIR/com.tokengochi.ingest.plist"
@@ -27,28 +28,23 @@ if [ ! -f "$PLIST_SRC" ]; then
 fi
 
 if [ ! -f "$ENV_FILE" ]; then
-  echo "tip: copy .env.example -> .env and set CLOUDFLARE_WORKER_URL / INGEST_TOKEN" >&2
-  WORKER_URL="https://tokengochi-staging.workers.dev"
-  INGEST_TOKEN="MISSING"
-  INGEST_INTERVAL_MS="60000"
-else
-  WORKER_URL="$(sed -n 's/^CLOUDFLARE_WORKER_URL=//p' "$ENV_FILE" | head -n 1 | tr -d '\r' )"
-  INGEST_TOKEN="$(sed -n 's/^INGEST_TOKEN=//p' "$ENV_FILE" | head -n 1 | tr -d '\r' )"
-  INGEST_INTERVAL_MS="$(sed -n 's/^INGEST_INTERVAL_MS=//p' "$ENV_FILE" | head -n 1 | tr -d '\r' )"
+  echo "error: copy .env.example to .env and set CLOUDFLARE_WORKER_URL / INGEST_TOKEN" >&2
+  exit 1
 fi
 
-if [ -z "$INGEST_INTERVAL_MS" ]; then
-  INGEST_INTERVAL_MS="60000"
+WORKER_URL="$(sed -n 's/^CLOUDFLARE_WORKER_URL=//p' "$ENV_FILE" | head -n 1 | tr -d '\r')"
+INGEST_TOKEN="$(sed -n 's/^INGEST_TOKEN=//p' "$ENV_FILE" | head -n 1 | tr -d '\r')"
+if [ -z "$WORKER_URL" ] || [ -z "$INGEST_TOKEN" ]; then
+  echo "error: CLOUDFLARE_WORKER_URL and INGEST_TOKEN must be set in $ENV_FILE" >&2
+  exit 1
 fi
+chmod 600 "$ENV_FILE"
 
 mkdir -p "$(dirname "$PLIST_DST")"
 awk \
   -v node="$NODE_BIN" \
   -v dir="$SCRIPT_DIR" \
-  -v worker_url="$WORKER_URL" \
-  -v ingest_token="$INGEST_TOKEN" \
-  -v ingest_interval="$INGEST_INTERVAL_MS" \
-  '{ gsub(/__NODE_BIN__/, node); gsub(/__BRIDGE_DIR__/, dir); gsub(/__WORKER_URL__/, worker_url); gsub(/__INGEST_TOKEN__/, ingest_token); gsub(/__INGEST_INTERVAL_MS__/, ingest_interval); print }' \
+  '{ gsub(/__NODE_BIN__/, node); gsub(/__BRIDGE_DIR__/, dir); print }' \
   "$PLIST_SRC" > "$PLIST_DST"
 
 launchctl unload "$PLIST_DST" 2>/dev/null || true

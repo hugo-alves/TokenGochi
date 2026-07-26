@@ -70,8 +70,8 @@ export async function transcribeAudio(
   });
 
   if (!groqRes.ok) {
-    const err = (await groqRes.text()).slice(0, 200);
-    throw new Error(`groq ${groqRes.status}: ${err}`);
+    await groqRes.arrayBuffer();
+    throw new Error(`groq ${groqRes.status}`);
   }
 
   const data = await groqRes.json() as { text?: unknown; language?: unknown };

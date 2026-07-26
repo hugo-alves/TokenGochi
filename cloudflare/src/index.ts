@@ -67,11 +67,6 @@ function tokenSourceConfigured(env: Env): boolean {
   return Boolean(env.TOKEN_SOURCE_URL && env.TOKEN_SOURCE_TOKEN);
 }
 
-function previewText(value: string, maxLength = 160): string {
-  const singleLine = value.replace(/\s+/g, " ").trim();
-  return singleLine.length > maxLength ? `${singleLine.slice(0, maxLength)}...` : singleLine;
-}
-
 async function fetchTokenSource(env: Env): Promise<TokenSnapshot> {
   if (!tokenSourceConfigured(env)) throw new Error("token source not configured");
 
@@ -88,7 +83,7 @@ async function fetchTokenSource(env: Env): Promise<TokenSnapshot> {
   });
   const text = await res.text();
   if (!res.ok) {
-    throw new Error(`token source ${res.status}: ${text.slice(0, 200)}`);
+    throw new Error(`token source ${res.status}`);
   }
 
   let payload: unknown;
@@ -199,13 +194,13 @@ async function onWatchTranscribe(req: Request, env: Env): Promise<Response> {
     );
   } catch (err) {
     console.error(`[transcribe:${traceId}] recv groq error=${JSON.stringify(String((err as Error).message || err))}`);
-    return jsonResponse({ error: String((err as Error).message || "groq failure") }, 502);
+    return jsonResponse({ error: "groq failure" }, 502);
   }
 
   console.log(
     `[transcribe:${traceId}] recv groq ok text_len=${transcription.text.length}` +
     ` lang=${JSON.stringify(transcription.lang)} duration_ms=${transcription.durationMs}` +
-    ` ms_groq=${transcription.msGroq} text_preview=${JSON.stringify(previewText(transcription.text))}`
+    ` ms_groq=${transcription.msGroq}`
   );
 
   await recordTranscription(

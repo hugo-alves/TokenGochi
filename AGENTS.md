@@ -6,24 +6,17 @@ Treat it as production-bound hardware work: verify before changing, keep edits
 small, and never mix firmware, backend, deployment, and secret changes unless
 the user explicitly asks for that scope.
 
-## Current Verified Context
+## Repository Context
 
-- Repo path: `/Users/hugoalves/Code/TokenGochi`.
-- Git repo: yes.
-- Default branch at last agent handoff: `main`.
-- Local bridge health checked on 2026-06-09:
-  `GET http://localhost:8787/health` returned
-  `{"ok":true,"version":"0.2.0","groq_configured":false,"whisper_model":null}`.
-- `rtk` is available at `/opt/homebrew/bin/rtk` and may be used for supported
-  shell commands when it keeps output readable.
+- Work from the repository root; do not assume a machine-specific absolute
+  path.
+- The default branch is `main`.
 - Use `./tools/pio` for PlatformIO commands. It runs PlatformIO through `uv`
   with Python 3.12, avoiding host `pio` wrappers pinned to unsupported Python
   versions.
 
 Status from `STATUS.md` is useful project context but should be re-verified
-before making claims about the live device. As of that document, bridge,
-firmware build, and tests were working, while the watch was blocked on a WiFi
-association issue with `Parada Clientes`.
+before making claims about a live device, deployment, or account.
 
 ## What This Project Is
 
@@ -51,7 +44,8 @@ shows stats on the watch, and can transcribe short voice interactions.
 - Controls: KEYA on G2, KEYB on G1, plus power/reset.
 - Audio: MEMS mic and speaker through the M5Unified/M5GFX stack.
 - WiFi: 2.4 GHz only. Captive portals are not supported by the firmware.
-- Development host: this checkout is on a Mac under `/Users/hugoalves/Code`.
+- Development host: macOS for StopWatch flashing and launchd integration;
+  Linux is supported for the optional VPS token source.
 
 Prefer an iPhone hotspot or known home router for firmware WiFi verification.
 Cafe/public WiFi with a browser portal can authenticate and then deauth the
@@ -59,8 +53,8 @@ watch before DHCP completes.
 
 ## Current Work And Known Constraints
 
-- The firmware currently points at the Cloudflare staging URL in
-  `firmware/src/config.h`: `https://tokengochi-staging.pissa.workers.dev`.
+- `firmware/src/config.h` contains an example Worker URL that each developer
+  must replace or override for their environment.
 - Local fallback is still supported by changing `PROXY_URL` to the Mac LAN URL,
   usually `http://<mac-lan-ip>:8787`.
 - `GROQ_API_KEY` is not configured for the live local bridge unless
@@ -70,6 +64,8 @@ watch before DHCP completes.
   non-captive network.
 - Cloudflare staging and production must stay separate. Never point staging at
   production D1, production secrets, or production traffic.
+- Local transcript-log token counting is the default. The unsupported Codex
+  account-usage path is read-only, experimental, and requires explicit opt-in.
 - Production deploys, migrations, and environment changes require explicit
   confirmation in the same turn.
 

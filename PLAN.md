@@ -337,9 +337,9 @@ TokenGochi/
 
 ## 11. Resolved (final v1 scope)
 
-1. **Pet art** → AI-generate 16 face variants (4 moods × 4 frames), embed as
-   RGB565 in `firmware/assets/sprites.h`, manual touch-up of any faces that
-   look off after first flash.
+1. **Pet art** → generate 16 original procedural face variants (4 moods × 4
+   frames) with `tools/generate-sprites.mjs` and embed them as RGB565 in
+   `firmware/src/sprites.h`.
 2. **Bridge uptime** → ship a `com.tokengochi.bridge.plist` `launchd` agent in
    `bridge/` and document `launchctl load -w` in the README. RunAtLoad +
    KeepAlive. Logs to `bridge/bridge.log`.

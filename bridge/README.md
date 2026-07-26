@@ -1,10 +1,9 @@
 # Bridge
 
-Self-contained Node script (`tamagotchi-bridge.mjs`) that reads Codex account
-usage through the same OAuth API path CodexBar uses, or falls back to local
-Claude Code / Codex CLI transcripts, derives pet stats, and optionally proxies
-audio to Groq Whisper. No `npm install`, no background workers, no deps beyond
-the Node 18+ stdlib.
+Self-contained Node script (`tamagotchi-bridge.mjs`) that reads local Claude
+Code / Codex CLI transcript token counts, derives pet stats, and optionally
+proxies audio to Groq Whisper. No `npm install`, no background workers, no
+dependencies beyond the Node 18+ stdlib.
 
 For Cloudflare deployments, either use `token-ingest.mjs` to publish token
 totals to a public Worker, or run `token-source.mjs` on a VPS and let the
@@ -28,8 +27,13 @@ capped at 1 MB (≈30 s of 16 kHz mono 16-bit PCM).
 Foreground (one terminal tab):
 
 ```sh
+cp .env.example .env
+# Set DEVICE_TOKEN to: openssl rand -hex 32
 node tamagotchi-bridge.mjs
 ```
+
+The HTTP server binds to `127.0.0.1` by default. Set `HOST=0.0.0.0` only when
+the watch must connect directly over a trusted LAN.
 
 One-shot snapshot (prints tokens + state, exits):
 
@@ -37,18 +41,20 @@ One-shot snapshot (prints tokens + state, exits):
 node tamagotchi-bridge.mjs --once
 ```
 
-## Codex account usage
+## Experimental Codex account usage
 
-`TOKEN_USAGE_SOURCE=auto` is the default. In that mode, the bridge first reads
-`~/.codex/auth.json`, refreshes the OAuth token when needed, and calls the
-Codex account usage endpoint. This is subscription-wide rate-limit usage, the
-same class of data CodexBar shows, not per-machine session logs.
+Local transcript-log scanning is the default. An experimental mode can read an
+existing Codex access token and call an unsupported account-usage endpoint:
 
-The account endpoint reports percentages rather than raw tokens. To preserve
-the existing backend contract, TokenGochi maps the weekly
-`metric_used_percent * 1000` to `breakdown.codex` and `food_today`, and also
-includes `usage.codex.metric_used_percent` so firmware/UI can display the real
-weekly percent.
+```sh
+TOKEN_USAGE_SOURCE=codex-account
+EXPERIMENTAL_CODEX_ACCOUNT_USAGE=1
+```
+
+This mode is opt-in, never refreshes or rewrites `~/.codex/auth.json`, and may
+stop working without notice. The endpoint reports percentages rather than raw
+tokens, so TokenGochi maps `metric_used_percent * 1000` into the existing food
+contract.
 
 The bridge also computes a CodexBar-style pace signal on the weekly window:
 `usage.codex.pace.expected_used_percent`, `actual_used_percent`,
@@ -64,8 +70,6 @@ The current ladder is:
 | `slightly_behind`, `behind`, `far_behind` | `very hungry` |
 | `on_track` | `happy` |
 | `slightly_ahead`, `ahead`, `far_ahead` | `very happy` |
-
-Set `TOKEN_USAGE_SOURCE=local` to force the old transcript-log scanner.
 
 ## Install as a launchd agent (recommended)
 
@@ -90,8 +94,9 @@ tail -f bridge.log                  # follow logs
 ./uninstall.sh                      # stop + remove
 ```
 
-If you don't have a `.env` yet, the install prints a reminder. The bridge
-will still come up — just with the default `DEVICE_TOKEN`.
+The installer requires `.env` with a non-placeholder `DEVICE_TOKEN` of at
+least 32 characters, restricts `.env` to the current user, and writes the
+generated plist with user-only permissions.
 
 ## Cloudflare ingest client
 
@@ -111,14 +116,14 @@ Install/remove:
 ```
 
 It creates `~/Library/LaunchAgents/com.tokengochi.ingest.plist` and writes
-runtime logs to `ingest.log`.
+runtime logs to `ingest.log`. Secrets stay in the user-only `.env`; they are
+not copied into the plist.
 
 ## VPS token-source server
 
 `token-source.mjs` is the pull-mode equivalent for a VPS. It serves the same
 snapshot shape from `GET /tokens_today`, including optional `usage` metadata,
-authenticated with
-`TOKEN_SOURCE_TOKEN`.
+authenticated with `TOKEN_SOURCE_TOKEN`.
 
 ```sh
 cp .env.example .env
@@ -136,13 +141,10 @@ systemctl --user status tokengochi-token-source.service
 journalctl --user -u tokengochi-token-source.service -f
 ```
 
-The service can bind on the VPS, but Cloudflare cannot reach a private
-Tailscale IP such as `100.78.209.61` directly. Publish the local service with
-Cloudflare Tunnel or Tailscale Funnel and configure the Worker
-`TOKEN_SOURCE_URL` to the resulting public HTTPS token-source URL. On the
-currently verified VPS, Tailscale reports `g33k-kid-agent.taild47216.ts.net`,
-so the expected Funnel base URL is
-`https://g33k-kid-agent.taild47216.ts.net`.
+The token source binds to `127.0.0.1` by default. Keep it on loopback and
+publish it through Cloudflare Tunnel, Tailscale Funnel, or another
+authenticated HTTPS route. Configure the Worker `TOKEN_SOURCE_URL` with that
+public HTTPS URL; a Worker cannot fetch a private tailnet address directly.
 
 ## Configuration
 

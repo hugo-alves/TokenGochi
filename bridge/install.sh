@@ -4,6 +4,7 @@
 # paths baked in, then `launchctl load -w`s it. Idempotent: re-running just
 # reloads the existing plist.
 set -e
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLIST_SRC="$SCRIPT_DIR/com.tokengochi.bridge.plist"
@@ -30,6 +31,19 @@ if [ ! -f "$PLIST_SRC" ]; then
   exit 1
 fi
 
+if [ ! -f "$ENV_FILE" ]; then
+  echo "error: missing $ENV_FILE" >&2
+  echo "copy .env.example to .env and set a random DEVICE_TOKEN first" >&2
+  exit 1
+fi
+
+DEVICE_TOKEN="$(sed -n 's/^DEVICE_TOKEN=//p' "$ENV_FILE" | head -n 1 | tr -d '\r')"
+if [ "${#DEVICE_TOKEN}" -lt 32 ] || [ "$DEVICE_TOKEN" = "replace-with-a-random-device-token" ]; then
+  echo "error: DEVICE_TOKEN must be a non-placeholder secret of at least 32 characters" >&2
+  exit 1
+fi
+chmod 600 "$ENV_FILE"
+
 # --- bake absolute paths into the plist -------------------------------------
 mkdir -p "$(dirname "$PLIST_DST")"
 awk \
@@ -48,12 +62,6 @@ echo "node:      $NODE_BIN (v$NODE_VERSION)"
 echo "dir:       $SCRIPT_DIR"
 echo "log:       $LOG_FILE"
 echo
-
-if [ ! -f "$ENV_FILE" ]; then
-  echo "tip: no .env found — bridge will use the default DEVICE_TOKEN."
-  echo "     copy and edit:  cp $SCRIPT_DIR/.env.example $ENV_FILE"
-  echo
-fi
 
 echo "manage it:"
 echo "  launchctl list | grep tokengochi    # status + pid"

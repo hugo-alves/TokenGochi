@@ -26,7 +26,7 @@ loadEnvFile(join(root, "bridge", ".env"));
 const WORKER_URL = (process.env.CLOUDFLARE_WORKER_URL || "").replace(/\/+$/, "");
 const DEVICE_TOKEN = (process.env.DEVICE_TOKEN || "").trim();
 const INGEST_TOKEN = (process.env.INGEST_TOKEN || "").trim();
-const TOKEN_SOURCE_URL = (process.env.TOKEN_SOURCE_URL || "https://g33k-kid-agent.taild47216.ts.net").replace(/\/+$/, "");
+const TOKEN_SOURCE_URL = (process.env.TOKEN_SOURCE_URL || "").replace(/\/+$/, "");
 const TOKEN_SOURCE_TOKEN = (process.env.TOKEN_SOURCE_TOKEN || "").trim();
 
 function tokenSourceUrls(raw) {

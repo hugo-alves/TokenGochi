@@ -30,16 +30,18 @@ Codex CLI token usage. The primary target is the **M5Stack StopWatch Dev Kit
 
 ```sh
 cd bridge
+cp .env.example .env
+# Set DEVICE_TOKEN to: openssl rand -hex 32
+# Set HOST=0.0.0.0 only if the watch connects over your trusted LAN.
 ./install.sh                 # copies a launchd agent, starts it on :8787
 launchctl list | grep tokengochi   # confirm it’s running
 curl http://localhost:8787/health  # {ok, version, groq_configured}
 ```
 
-If you don’t have a Groq key yet, set one in `bridge/.env`:
+The bridge refuses to start with a missing, short, or placeholder device token.
+If you want transcription, also set a Groq key in `bridge/.env`:
 
 ```sh
-cp bridge/.env.example bridge/.env
-echo "GROQ_API_KEY=gsk_..." >> bridge/.env
 launchctl kickstart -k gui/$(id -u)/com.tokengochi.bridge
 ```
 
@@ -53,25 +55,21 @@ npm run deploy:staging       # set D1 IDs/secrets first; see cloudflare/README.m
 
 Then choose where token totals come from.
 
-By default, the bridge uses the same Codex account-usage source as CodexBar
-when `~/.codex/auth.json` contains OAuth login tokens. That reports subscription
-rate-limit usage as a percentage, not raw local session tokens. TokenGochi maps
-1% weekly account usage to 1000 food units for the backend contract, and the
-firmware displays the weekly account percentage when that metadata is present.
-If account usage is unavailable in `TOKEN_USAGE_SOURCE=auto`, the bridge falls
-back to local Claude/Codex transcript logs.
+By default, the bridge reads token counts from local Claude Code and Codex CLI
+transcript logs. It does not upload the transcripts or their contents.
 
-For Codex account usage, the pet mood is driven by pace against the weekly
-window. TokenGochi uses CodexBar's linear pace fallback: expected usage is the
-elapsed fraction of the reset window, and actual usage is compared against it
-with CodexBar's 2% / 6% / 12% thresholds. Behind pace is shown as reserve:
-you are leaving weekly tokens unused, so the pet becomes very hungry. Ahead of
-pace is shown as deficit: you are spending faster than the even weekly pace, so
-the pet becomes very happy.
+An experimental account-usage mode can read an existing Codex access token and
+query an unsupported account endpoint. It is disabled by default, never
+refreshes or rewrites `~/.codex/auth.json`, and may stop working without
+notice. To opt in, set both `TOKEN_USAGE_SOURCE=codex-account` and
+`EXPERIMENTAL_CODEX_ACCOUNT_USAGE=1`.
 
-- `slightly_behind` / `behind` / `far_behind` -> `very hungry`
-- `on_track` -> `happy`
-- `slightly_ahead` / `ahead` / `far_ahead` -> `very happy`
+In that experimental mode, TokenGochi maps weekly usage percentage to the
+existing integer food contract and derives a pace signal:
+
+- behind pace → hungry
+- on pace → happy
+- ahead of pace → very happy
 
 Push snapshots from the current machine:
 
@@ -230,12 +228,28 @@ power-only use.
 
 ```sh
 node bridge/_test_pure.mjs          # 11 pure-logic tests
-node bridge/_test_transcribe.mjs    # 5 e2e tests with a mock Groq server
+node bridge/_test_token_source.mjs  # token-source auth and snapshot contract
+node bridge/_test_transcribe.mjs    # 6 e2e tests with a mock Groq server
+cd cloudflare && npm run build      # Worker dry build
+cd ../firmware && ../tools/pio test -e native
 ```
 
-Both must exit 0. The e2e test spawns the real bridge and a mock Groq on
-random ports, exercises every endpoint, and rolls back `state.json` at the
-end so it leaves no side effects.
+All must exit 0. The e2e test spawns the real bridge and a mock Groq on random
+ports, exercises every endpoint, and rolls back `state.json` at the end so it
+leaves no side effects.
+
+## Security and privacy
+
+- Secrets belong only in the gitignored `bridge/.env`,
+  `firmware/src/secrets.h`, Cloudflare secrets, or your service manager.
+- The HTTP bridge and VPS token source bind to loopback by default. Expose them
+  only through a trusted LAN or authenticated tunnel.
+- Local and Cloudflare logs contain request metadata, sizes, timings, and
+  status codes, but never transcript text, bearer tokens, or upstream bodies.
+- Voice audio is sent to the configured Groq endpoint for transcription.
+- Successful transcript text is stored in the device history and pet state;
+  Cloudflare mode also persists it in your D1 database.
+- See [`SECURITY.md`](SECURITY.md) for reporting and credential-rotation steps.
 
 ## Troubleshooting
 
@@ -292,4 +306,4 @@ TokenGochi/
 
 ## License
 
-MIT.
+[MIT](LICENSE).

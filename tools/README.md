@@ -44,7 +44,7 @@ node tools/synth-pet-state.mjs --cycle 3000
 node tools/synth-pet-state.mjs --mood hungry --food 0 --age 2592000
 
 # talk to the synth bridge the same way the firmware will
-curl -H "Authorization: Bearer the-same-long-random-string-as-the-firmware" \
+curl --oauth2-bearer local-dev-device-token-not-for-production-0001 \
   http://localhost:8788/pet/state
 ```
 
@@ -166,7 +166,7 @@ need to be repeated if they are already there. Required environment:
 CLOUDFLARE_WORKER_URL=... \
 DEVICE_TOKEN=... \
 INGEST_TOKEN=... \
-TOKEN_SOURCE_URL=https://g33k-kid-agent.taild47216.ts.net \
+TOKEN_SOURCE_URL=https://your-token-source.example.com \
 TOKEN_SOURCE_TOKEN=... \
 node tools/cloud-vps-smoke.mjs
 ```
@@ -177,8 +177,10 @@ Prints the exact commands needed to install the token source on the VPS and
 enable Tailscale Funnel. Dry-run is the default.
 
 ```sh
-node tools/rollout-vps-token-source.mjs
-node tools/rollout-vps-token-source.mjs --apply --yes
+VPS=user@host TOKEN_SOURCE_URL=https://your-token-source.example.com \
+  node tools/rollout-vps-token-source.mjs
+VPS=user@host TOKEN_SOURCE_URL=https://your-token-source.example.com \
+  node tools/rollout-vps-token-source.mjs --apply --yes
 ```
 
 To deploy staging and run the smoke after the VPS service is reachable:
@@ -197,7 +199,7 @@ node tools/rollout-vps-token-source.mjs --apply --yes --deploy-staging
 node tools/synth-pet-state.mjs --cycle 4000
 
 # terminal 2: poke at it like the firmware would
-curl -H "Authorization: Bearer the-same-long-random-string-as-the-firmware" \
+curl --oauth2-bearer local-dev-device-token-not-for-production-0001 \
   http://localhost:8788/pet/state
 node tools/record-test-clip.mjs --url http://localhost:8788 --say "hi buddy"
 node tools/capture-device-screen.mjs --out screenshots/ui-check.png

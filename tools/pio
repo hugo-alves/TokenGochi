@@ -1,4 +1,10 @@
 #!/usr/bin/env sh
 set -eu
 
-exec /Users/hugoalves/.local/bin/uvx --python 3.12 --with intelhex platformio "$@"
+UVX_BIN="$(command -v uvx || true)"
+if [ -z "$UVX_BIN" ]; then
+  echo "error: uvx not found; install uv from https://docs.astral.sh/uv/" >&2
+  exit 1
+fi
+
+exec "$UVX_BIN" --python 3.12 --with intelhex platformio "$@"

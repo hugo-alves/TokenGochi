@@ -99,7 +99,7 @@ try {
   j = await r.json();
   assert.equal(r.status, 200);
   assert.equal(j.breakdown.codex, 250);
-  assert.equal(j.usage.source, "local_logs_fallback");
+  assert.equal(j.usage.source, "local_logs");
   assert.equal(j.usage.activity.source, "local_logs");
   assert.equal(j.usage.activity.stage, "awake");
   assert.equal(typeof j.usage.activity.last_active_ts, "number");

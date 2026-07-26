@@ -29,7 +29,7 @@ import { spawn, spawnSync } from "node:child_process";
 const args = parseArgs(process.argv.slice(2));
 
 const URL    = args.url    ?? "http://localhost:8787";
-const TOKEN  = args.token  ?? "the-same-long-random-string-as-the-firmware";
+const TOKEN  = args.token  ?? "local-dev-device-token-not-for-production-0001";
 const SEC    = parseInt(args.seconds ?? "0", 10);
 const IN     = args.in     ?? null;
 const SAY    = args.say    ?? null;
@@ -99,7 +99,7 @@ async function postWav(wav) {
 
 // --- main -------------------------------------------------------------------
 async function main() {
-  console.log(`[record-test-clip] url=${URL} token=${TOKEN.slice(0, 8)}…`);
+  console.log(`[record-test-clip] url=${URL} token=configured`);
   const { wav, source } = await captureAudio();
   const sizeKb = (wav.length / 1024).toFixed(1);
   console.log(`[record-test-clip] source=${source} size=${sizeKb}KB`);
