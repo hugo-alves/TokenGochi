@@ -3,6 +3,8 @@
 **Give your AI token meter a face, a mood, and the power to make you feel
 slightly guilty.**
 
+![AI coding tokens feeding the firmware-rendered TokenGochi pet on an ESP32 watch](docs/assets/readme/tokengochi-hero.png)
+
 TokenGochi turns Claude Code and Codex CLI usage into a virtual pet living on a
 small ESP32 device. Your coding sessions feed it. As your token usage changes,
 the creature gets hungry, happy, sleepy, or sick—and quietly judges you from
@@ -17,6 +19,8 @@ The joke is a mildly dystopian reversal of the Tamagotchi: instead of keeping a
 digital creature alive by pressing buttons, you keep it alive by asking an AI
 to write code. Productive workflow or emotional blackmail from a tiny computer?
 That is between you and your pet.
+
+![The four current firmware pet moods: happy, hungry, sleepy, and sick](docs/assets/readme/tokengochi-moods.png)
 
 The project has three main pieces:
 
