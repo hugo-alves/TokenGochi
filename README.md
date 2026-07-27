@@ -1,9 +1,31 @@
 # Token Tamagotchi 🐣
 
-A virtual pet for small M5Stack ESP32 devices that lives on your Claude Code /
-Codex CLI token usage. The primary target is the **M5Stack StopWatch Dev Kit
-(ESP32-S3)**, with a compact **M5StickC Plus2-class** target for the smaller
-240x135 screen.
+**Give your AI token meter a face, a mood, and the power to make you feel
+slightly guilty.**
+
+TokenGochi turns Claude Code and Codex CLI usage into a virtual pet living on a
+small ESP32 device. Your coding sessions feed it. As your token usage changes,
+the creature gets hungry, happy, sleepy, or sick—and quietly judges you from
+your desk or wrist.
+
+Most token tracking lives in logs and account dashboards: useful numbers, but
+easy to forget until a limit suddenly matters. TokenGochi makes that invisible
+activity physical, ambient, and glanceable. You can see the shape of your AI
+coding habit without opening another tab.
+
+The joke is a mildly dystopian reversal of the Tamagotchi: instead of keeping a
+digital creature alive by pressing buttons, you keep it alive by asking an AI
+to write code. Productive workflow or emotional blackmail from a tiny computer?
+That is between you and your pet.
+
+The project has three main pieces:
+
+- firmware that draws and animates the pet on an **M5Stack StopWatch Dev Kit**
+  or a compact **M5StickC Plus2-class** device;
+- a local Node bridge that counts Claude Code and Codex CLI tokens and turns
+  activity into pet state;
+- an optional Cloudflare backend for HTTPS access, plus optional Groq
+  transcription so you can talk to the pet.
 
 ```
          ⌚  ← the StopWatch
