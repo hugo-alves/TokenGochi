@@ -38,6 +38,14 @@ ipconfig getifaddr en0
 # #define PROXY_URL "https://tokengochi-staging.YOUR_ACCOUNT.workers.dev"
 ```
 
+HTTPS validates the documented `workers.dev` endpoint and common public
+Google Trust/Let's Encrypt chains. Set `TLS_ROOT_CA` in `src/config.h` when a
+custom HTTPS endpoint uses another root. The watch syncs its clock with the
+configured NTP servers before its first HTTPS request; adjust
+`TLS_NTP_SERVER_1` and `TLS_NTP_SERVER_2` if the network requires different
+time sources. If the root CA, time, or certificate validation fails, requests
+fail closed. The HTTP option is only for a trusted local LAN.
+
 ### 4. Flash
 
 Connect the StopWatch via USB-C, put it in download mode by holding the reset

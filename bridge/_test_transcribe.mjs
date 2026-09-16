@@ -4,12 +4,13 @@
 // Spawns a mock "Groq" that captures the multipart body and returns a canned
 // JSON transcript, then starts the real bridge with GROQ_URL pointed at the
 // mock. Sends a synthesized 16 kHz mono WAV through /transcribe and asserts
-// the response, the state.json side effects, and the multipart envelope.
+// the response, isolated state-file side effects, and the multipart envelope.
 
 import { createServer } from "node:http";
-import { readFileSync, copyFileSync, unlinkSync, existsSync } from "node:fs";
+import { readFileSync, copyFileSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { strict as assert } from "node:assert";
 
@@ -17,6 +18,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const BRIDGE_PORT  = 19000 + Math.floor(Math.random() * 1000);
 const MOCK_PORT    = BRIDGE_PORT + 1;
 const DEVICE_TOKEN = "test-device-token-at-least-32-chars-" + Date.now();
+const TEST_DIR     = mkdtempSync(join(tmpdir(), "tokengochi-transcribe-"));
+const STATE_FILE   = join(TEST_DIR, "state.json");
+const BRIDGE_SCRIPT = join(TEST_DIR, "tamagotchi-bridge.mjs");
 
 // --- helpers ---------------------------------------------------------------
 function makeWav(durationS = 1.0, sampleRate = 16000) {
@@ -42,13 +46,44 @@ function makeWav(durationS = 1.0, sampleRate = 16000) {
   return buf;
 }
 
-async function waitFor(condFn, ms = 5000) {
-  const start = Date.now();
-  while (Date.now() - start < ms) {
-    if (await condFn()) return;
-    await new Promise(r => setTimeout(r, 25));
-  }
-  throw new Error("timeout waiting for condition");
+function waitForBridgeReady(child, ms = 5000) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => finish(new Error("timeout waiting for bridge startup")), ms);
+    const onOutput = (data) => {
+      if (String(data).includes("listening on")) finish();
+    };
+    const onExit = (code, signal) => finish(
+      new Error(`bridge exited before startup (code=${code}, signal=${signal})`)
+    );
+    const onError = (error) => finish(error);
+    function finish(error) {
+      clearTimeout(timeout);
+      child.stdout.off("data", onOutput);
+      child.off("exit", onExit);
+      child.off("error", onError);
+      if (error) reject(error);
+      else resolve();
+    }
+    child.stdout.on("data", onOutput);
+    child.once("exit", onExit);
+    child.once("error", onError);
+  });
+}
+
+function listen(server, port) {
+  return new Promise((resolve, reject) => {
+    const onListening = () => finish();
+    const onError = (error) => finish(error);
+    function finish(error) {
+      server.off("listening", onListening);
+      server.off("error", onError);
+      if (error) reject(error);
+      else resolve();
+    }
+    server.once("listening", onListening);
+    server.once("error", onError);
+    server.listen(port, "127.0.0.1");
+  });
 }
 
 // --- mock groq -------------------------------------------------------------
@@ -71,45 +106,48 @@ const mockGroq = createServer((req, res) => {
   });
 });
 
-await new Promise(r => mockGroq.listen(MOCK_PORT, r));
-console.log(`mock groq listening on :${MOCK_PORT}`);
+let bridge;
 
-// --- bridge process ---------------------------------------------------------
-const STATE_FILE  = join(__dirname, "state.json");
-const STATE_BACK  = STATE_FILE + ".testbak";
-const hadState    = existsSync(STATE_FILE);
-if (hadState) copyFileSync(STATE_FILE, STATE_BACK);
+try {
+  await listen(mockGroq, MOCK_PORT);
+  console.log(`mock groq listening on :${MOCK_PORT}`);
 
-const bridge = spawn(
-  "node",
-  [join(__dirname, "tamagotchi-bridge.mjs")],
-  {
-    env: {
-      ...process.env,
-      PORT: String(BRIDGE_PORT),
-      DEVICE_TOKEN,
-      GROQ_API_KEY: "mock-groq-key",
-      GROQ_URL: `http://localhost:${MOCK_PORT}/`,
+  // --- bridge process -------------------------------------------------------
+  // Copying the standalone bridge into TEST_DIR keeps its relative .env and
+  // state.json paths away from developer configuration and runtime state.
+  copyFileSync(join(__dirname, "tamagotchi-bridge.mjs"), BRIDGE_SCRIPT);
+  bridge = spawn(
+    process.execPath,
+    [realpathSync(BRIDGE_SCRIPT)],
+    {
+      env: {
+        PORT: String(BRIDGE_PORT),
+        DEVICE_TOKEN,
+        GROQ_API_KEY: "mock-groq-key",
+        GROQ_URL: `http://127.0.0.1:${MOCK_PORT}/`,
+        HOME: TEST_DIR,
+        CLAUDE_CONFIG_DIR: join(TEST_DIR, "claude"),
+        CODEX_HOME: join(TEST_DIR, "codex"),
+      },
+      stdio: ["ignore", "pipe", "pipe"],
     },
-    stdio: ["ignore", "pipe", "pipe"],
-  }
-);
-bridge.stdout.on("data", d => process.stdout.write(`[bridge] ${d}`));
-bridge.stderr.on("data", d => process.stderr.write(`[bridge!] ${d}`));
+  );
+  const bridgeReady = waitForBridgeReady(bridge);
+  bridge.stdout.on("data", d => process.stdout.write(`[bridge] ${d}`));
+  bridge.stderr.on("data", d => process.stderr.write(`[bridge!] ${d}`));
 
-await waitFor(() =>
-  new Promise(r => {
-    const handler = () => { bridge.stdout.off("data", handler); r(true); };
-    bridge.stdout.on("data", d => { if (String(d).includes("listening on")) handler(); });
-  })
-);
-console.log(`bridge listening on :${BRIDGE_PORT}`);
+  await bridgeReady;
+  console.log(`bridge listening on :${BRIDGE_PORT}`);
+
+  if (process.env.TOKENGOCHI_TEST_FORCE_FAILURE === "1") {
+    throw new Error("forced failure after bridge startup");
+  }
 
 // --- test 1: 1s wav, happy path --------------------------------------------
 mockLastRequest = null;
 mockResponse = { status: 200, body: { text: "hello tamagotchi", language: "en" } };
 
-let r = await fetch(`http://localhost:${BRIDGE_PORT}/transcribe`, {
+let r = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/transcribe`, {
   method: "POST",
   headers: {
     "Authorization": `Bearer ${DEVICE_TOKEN}`,
@@ -147,7 +185,7 @@ console.log("test 3 (state.json side effects): ok");
 mockLastRequest = null;
 mockResponse = { status: 200, body: { text: "second transcript", language: "pt" } };
 
-r = await fetch(`http://localhost:${BRIDGE_PORT}/transcribe`, {
+r = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/transcribe`, {
   method: "POST",
   headers: {
     "Authorization": `Bearer ${DEVICE_TOKEN}`,
@@ -166,7 +204,7 @@ console.log("test 4 (0.5s wav, counter increments): ok");
 
 // --- test 5: groq returns 4xx -> 502 from bridge ---------------------------
 mockResponse = { status: 401, body: { error: { message: "Invalid API key" } } };
-r = await fetch(`http://localhost:${BRIDGE_PORT}/transcribe`, {
+r = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/transcribe`, {
   method: "POST",
   headers: {
     "Authorization": `Bearer ${DEVICE_TOKEN}`,
@@ -182,7 +220,7 @@ console.log("test 5 (groq 4xx -> 502): ok");
 // --- test 6: POST /pet/reset soft-resets -------------------------------------
 // Set a known state by recording two transcribes first, then call reset.
 mockResponse = { status: 200, body: { text: "reset-me-1", language: "en" } };
-r = await fetch(`http://localhost:${BRIDGE_PORT}/transcribe`, {
+r = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/transcribe`, {
   method: "POST",
   headers: { "Authorization": `Bearer ${DEVICE_TOKEN}`, "Content-Type": "audio/wav" },
   body: Buffer.alloc(100),
@@ -190,7 +228,7 @@ r = await fetch(`http://localhost:${BRIDGE_PORT}/transcribe`, {
 j = await r.json();
 assert.equal(j.text, "reset-me-1");
 
-r = await fetch(`http://localhost:${BRIDGE_PORT}/pet/reset`, {
+r = await fetch(`http://127.0.0.1:${BRIDGE_PORT}/pet/reset`, {
   method: "POST",
   headers: { "Authorization": `Bearer ${DEVICE_TOKEN}` },
 });
@@ -202,18 +240,14 @@ assert(after.age_s < 5,                 "pet was just born");
 assert(after.mood,                     "mood still computed");
 console.log("test 6 (/pet/reset soft-reset): ok");
 
-// --- cleanup ---------------------------------------------------------------
-bridge.kill("SIGTERM");
-await new Promise(r => bridge.once("exit", r));
-await new Promise(r => mockGroq.close(() => r()));
-
-if (hadState) {
-  copyFileSync(STATE_BACK, STATE_FILE);
-  if (existsSync(STATE_BACK)) unlinkSync(STATE_BACK);
-} else if (existsSync(STATE_FILE)) {
-  unlinkSync(STATE_FILE);
+  console.log("\nAll /transcribe tests passed.");
+} finally {
+  if (bridge?.pid && bridge.exitCode === null && bridge.signalCode === null) {
+    bridge.kill("SIGTERM");
+    await new Promise(resolve => bridge.once("exit", resolve));
+  }
+  if (mockGroq.listening) {
+    await new Promise(resolve => mockGroq.close(resolve));
+  }
+  rmSync(TEST_DIR, { recursive: true, force: true });
 }
-if (!hadState && existsSync(STATE_BACK)) unlinkSync(STATE_BACK);
-
-console.log("\nAll /transcribe tests passed.");
-process.exit(0);
