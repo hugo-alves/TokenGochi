@@ -4,7 +4,7 @@
 #ifndef PROXY_URL
 // Cloudflare worker URL (HTTPS). Keep only local-only LAN URL here for local fallback.
 // For staging/prod, flash the matching firmware build that points to that worker URL.
-#define PROXY_URL "https://tokengochi-staging.example.workers.dev"
+#define PROXY_URL "https://tokengochi-staging.xperiment.workers.dev"
 #endif
 
 #ifndef POLL_INTERVAL_MS
