@@ -99,6 +99,30 @@
 #define HTTP_TIMEOUT_MS 8000     // HTTPClient.setTimeout
 #endif
 
+// HTTPS certificate validation needs a real system clock. These public NTP
+// servers can be overridden at build time for networks with their own source.
+#ifndef TLS_NTP_SERVER_1
+#define TLS_NTP_SERVER_1 "time.cloudflare.com"
+#endif
+
+#ifndef TLS_NTP_SERVER_2
+#define TLS_NTP_SERVER_2 "pool.ntp.org"
+#endif
+
+#ifndef TLS_TIME_SYNC_TIMEOUT_MS
+#define TLS_TIME_SYNC_TIMEOUT_MS 10000
+#endif
+
+#ifndef TLS_MIN_VALID_EPOCH
+#define TLS_MIN_VALID_EPOCH 1704067200  // 2024-01-01 UTC
+#endif
+
+// PEM root CA override for a custom HTTPS endpoint. The default validates the
+// documented workers.dev endpoint; nullptr selects that default root.
+#ifndef TLS_ROOT_CA
+#define TLS_ROOT_CA ((const char*)nullptr)
+#endif
+
 #ifndef TRANSCRIBE_TIMEOUT_MS
 #define TRANSCRIBE_TIMEOUT_MS 30000  // Cloudflare -> Groq can take a few seconds
 #endif
