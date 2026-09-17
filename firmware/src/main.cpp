@@ -14,6 +14,7 @@
 #include "device_settings.h"
 #include "battery_status.h"
 #include "display_policy.h"
+#include "app_launcher.h"
 
 #include <ArduinoJson.h>
 
@@ -50,7 +51,7 @@ static uint32_t     g_clockEpochSec = 0;
 static uint32_t     g_clockSyncedAtMs = 0;
 static size_t       g_historyIndex = 0;
 
-enum class Mode : uint8_t { IDLE, VOICE_IDLE, RECORDING, TRANSCRIBING, SHOWING, HISTORY_LIST, HISTORY_READING, STATS, CONFIRM, SETTINGS, SETTINGS_SAVED, ERROR };
+enum class Mode : uint8_t { IDLE, VOICE_IDLE, RECORDING, TRANSCRIBING, SHOWING, HISTORY_LIST, HISTORY_READING, STATS, CONFIRM, SETTINGS, SETTINGS_SAVED, ERROR, LAUNCHER };
 enum class SettingsView : uint8_t { MENU, VOICE, BRIGHTNESS, VOLUME, FEEDBACK, AUTO_DIM, BATTERY };
 static Mode         g_mode = Mode::IDLE;
 static SettingsView g_settingsView = SettingsView::MENU;
@@ -86,6 +87,9 @@ static bool         g_greetOnFirstPoll = true;
 static bool         g_suppressButtonsUntilRelease = false;
 static uint32_t     g_suppressButtonsUntilMs = 0;
 static uint32_t     g_abHoldStartMs = 0;
+static apps::Launcher g_launcher;
+static apps::HoldGesture g_launcherHold;
+static bool         g_launcherWakeRelease = false;
 
 static constexpr uint32_t ERROR_HOLD_MS  = 3000; // show error then return
 static constexpr uint32_t STATS_TIMEOUT_MS = 8000; // auto-dismiss stats view
@@ -106,6 +110,10 @@ static void sampleBattery(bool force, const char* source);
 static void sleepForLoopDelay(uint32_t delayMs);
 static void printPowerProfile(Stream& out);
 static bool passiveIdlePowerMode();
+static bool launcherEntryAllowed();
+static void enterLauncher(const char* source);
+static bool handleLauncherNavigation();
+static void updateLauncher();
 
 static constexpr uint32_t kMaxPollIntervalMs =
     TOKENGOCHI_PASSIVE_POLL_INTERVAL_MS > POLL_INTERVAL_MS
@@ -291,6 +299,7 @@ static uint32_t loopDelayMs() {
         case Mode::IDLE:
         case Mode::VOICE_IDLE:
         case Mode::STATS:
+        case Mode::LAUNCHER:
             return TOKENGOCHI_IDLE_LOOP_DELAY_MS;
         default:
             return TOKENGOCHI_ACTIVE_LOOP_DELAY_MS;
@@ -299,7 +308,7 @@ static uint32_t loopDelayMs() {
 
 static bool passiveIdlePowerMode() {
     if (displayVisible()) return false;
-    if (g_mode != Mode::IDLE && g_mode != Mode::VOICE_IDLE) return false;
+    if (g_mode != Mode::IDLE && g_mode != Mode::VOICE_IDLE && g_mode != Mode::LAUNCHER) return false;
     return !M5.Speaker.isRunning() && !M5.Mic.isRunning() && !audio::micActive();
 }
 
@@ -314,8 +323,8 @@ static void applyRuntimePowerPolicy(const char* source) {
     const bool passive = passiveIdlePowerMode();
     const bool connected = g_wifiUp && WiFi.status() == WL_CONNECTED;
     if (passive &&
-        connected &&
-        !statePollDue(now) &&
+        (connected || (g_mode == Mode::LAUNCHER && WiFi.getMode() != WIFI_OFF)) &&
+        (g_mode == Mode::LAUNCHER || !statePollDue(now)) &&
         now - g_lastInteractionMs >= TOKENGOCHI_WIFI_IDLE_OFF_MS) {
         stopWifiRadio("passive idle", true, true);
     }
@@ -459,6 +468,9 @@ static void handleSerialCommands() {
             line[len] = '\0';
             if (handleImmediateSerialCommand(line)) {
                 // handled
+            } else if (strcmp(line, "TGLAUNCHER") == 0) {
+                if (launcherEntryAllowed()) enterLauncher("serial");
+                else Serial.println("TGLAUNCHER unavailable in current mode/target");
             } else if (strcmp(line, "TGSETTINGS") == 0) {
                 enterSettings("serial");
             } else if (strcmp(line, "TGSETTING VOICE") == 0) {
@@ -686,6 +698,7 @@ static void noteInteraction(const char* source) {
 
 static display_policy::ActivityClass displayActivityForMode(Mode mode) {
     switch (mode) {
+        case Mode::LAUNCHER:
         case Mode::IDLE: return display_policy::ActivityClass::Idle;
         case Mode::VOICE_IDLE: return display_policy::ActivityClass::VoiceIdle;
         case Mode::STATS: return display_policy::ActivityClass::Stats;
@@ -798,7 +811,8 @@ static bool btnBHold() {
 }
 
 static bool settingsEntryAllowed() {
-    return g_mode == Mode::IDLE || g_mode == Mode::VOICE_IDLE || g_mode == Mode::STATS;
+    return g_mode == Mode::IDLE || g_mode == Mode::VOICE_IDLE ||
+           g_mode == Mode::STATS || g_mode == Mode::LAUNCHER;
 }
 
 static uint32_t clampRecordSeconds(uint32_t seconds) {
@@ -909,6 +923,10 @@ static void showDurationSaved(const char* source) {
 }
 
 static void enterSettings(const char* source) {
+    if (g_mode == Mode::LAUNCHER) {
+        g_launcher.exit();
+        apps::quietLauncherPeripherals();
+    }
     Serial.printf("[btn] %s -> settings (voice=%s cap=%lus)\n",
                   source,
                   device_settings::recordModeLabel(g_settings),
@@ -1259,6 +1277,11 @@ static void drawPetHome() {
 }
 
 static void returnToPet(const char* source) {
+    if (g_mode == Mode::LAUNCHER) {
+        g_launcher.exit();
+        apps::quietLauncherPeripherals();
+        noteInteraction(source);
+    }
     Serial.printf("[btn] %s -> pet\n", source);
     ui::pageReset();
     g_mode = Mode::IDLE;
@@ -1379,6 +1402,8 @@ static void transcribeAndShow(const uint8_t* wav, size_t size) {
     }
 }
 
+#include "app_launcher_runtime.inc"
+
 // --- setup -----------------------------------------------------------------
 void setup() {
     Serial.begin(115200);
@@ -1455,13 +1480,19 @@ void loop() {
     handleSerialCommands();
     sampleBattery(false, "loop");
 
+    if (handleLauncherNavigation()) {
+        updateDisplayPolicy();
+        applyRuntimePowerPolicy("launcher input");
+        sleepForLoopDelay(loopDelayMs());
+        return;
+    }
     if (handleSettingsChord()) {
         sleepForLoopDelay(loopDelayMs());
         return;
     }
 
     // --- WiFi watchdog ------------------------------------------------------
-    if (!g_wifiUp || WiFi.status() != WL_CONNECTED) {
+    if (g_mode != Mode::LAUNCHER && (!g_wifiUp || WiFi.status() != WL_CONNECTED)) {
         g_wifiUp = false;
         g_bridgeUp = false;
         if (passiveIdlePowerMode() && WiFi.getMode() != WIFI_OFF) {
@@ -1489,6 +1520,10 @@ void loop() {
 
     // --- state machine ------------------------------------------------------
     switch (g_mode) {
+
+    case Mode::LAUNCHER:
+        updateLauncher();
+        break;
 
     case Mode::IDLE: {
         // Poll /pet/state every POLL_INTERVAL_MS

@@ -1,0 +1,99 @@
+{
+  "source_size": [
+    1254,
+    1254
+  ],
+  "palette_bytes": 256,
+  "rle_bytes": [
+    18386,
+    10866,
+    14548,
+    10880,
+    9030,
+    8358
+  ],
+  "total_palette_and_rle_bytes": 72324,
+  "bright_pixels_outside_disc_removed": 0,
+  "tiles": [
+    {
+      "id": "Pet",
+      "rect": [
+        72,
+        68,
+        174,
+        174
+      ],
+      "hit": [
+        159,
+        155,
+        80,
+        80
+      ],
+      "availability": "Ready"
+    },
+    {
+      "id": "Steady",
+      "rect": [
+        254,
+        73,
+        145,
+        142
+      ],
+      "hit": [
+        326,
+        144,
+        65,
+        64
+      ],
+      "availability": "Preview"
+    },
+    {
+      "id": "Vibe",
+      "rect": [
+        291,
+        226,
+        145,
+        148
+      ],
+      "hit": [
+        363,
+        300,
+        64,
+        66
+      ],
+      "availability": "Planned"
+    },
+    {
+      "id": "Sonifier",
+      "rect": [
+        33,
+        244,
+        143,
+        142
+      ],
+      "hit": [
+        104,
+        315,
+        64,
+        64
+      ],
+      "availability": "Planned"
+    },
+    {
+      "id": "TapTap",
+      "rect": [
+        174,
+        316,
+        149,
+        129
+      ],
+      "hit": [
+        248,
+        380,
+        67,
+        54
+      ],
+      "availability": "Planned"
+    }
+  ]
+}
